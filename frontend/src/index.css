@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: #f5f3f0;
+    --bg-card: #ffffff;
+    --text: #1c1814;
+    --text-muted: #7d6e5c;
+    --border: #d0c9bf;
+    --accent: #d97706;
+    --accent-soft: #fef3c7;
+  }
+
+  body {
+    @apply bg-ink-50 text-ink-900 font-body antialiased;
+    background-image: 
+      radial-gradient(circle at 20% 50%, rgba(245, 158, 11, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(85, 117, 72, 0.03) 0%, transparent 50%);
+  }
+
+  * {
+    @apply border-ink-200;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl border border-ink-200 shadow-sm;
+  }
+
+  .btn-primary {
+    @apply bg-ink-900 text-white px-5 py-2.5 rounded-xl font-medium text-sm
+           hover:bg-ink-800 active:bg-ink-950 transition-colors duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent text-ink-700 px-5 py-2.5 rounded-xl font-medium text-sm
+           border border-ink-300 hover:bg-ink-100 active:bg-ink-200 transition-colors duration-150;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-ink-600 px-4 py-2 rounded-lg text-sm
+           hover:bg-ink-100 transition-colors duration-150;
+  }
+
+  .input {
+    @apply w-full bg-white border border-ink-200 rounded-xl px-4 py-3 text-sm text-ink-900
+           placeholder-ink-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent
+           transition-all duration-150;
+  }
+
+  .label {
+    @apply text-xs font-medium text-ink-600 uppercase tracking-wider mb-1.5 block;
+  }
+
+  .drift-positive {
+    @apply text-sage-600 bg-sage-50 border-sage-200;
+  }
+
+  .drift-negative {
+    @apply text-red-600 bg-red-50 border-red-200;
+  }
+
+  .drift-neutral {
+    @apply text-ink-500 bg-ink-100 border-ink-200;
+  }
+
+  .stage-badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0c9bf; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b5a99a; }
+
+/* Score ring animation */
+@keyframes drawRing {
+  from { stroke-dashoffset: 282; }
+  to { stroke-dashoffset: var(--target-offset); }
+}
+.score-ring circle:last-child {
+  animation: drawRing 0.8s ease-out forwards;
+}

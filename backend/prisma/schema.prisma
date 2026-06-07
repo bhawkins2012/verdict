@@ -1,0 +1,302 @@
+// Verdict — Prisma Schema
+// PostgreSQL + pgvector
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// ─────────────────────────────────────────
+// USERS & DEMOGRAPHICS
+// ─────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String
+  displayName   String?
+  avatarUrl     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  emailVerified Boolean  @default(false)
+
+  demographics  UserDemographics?
+  reviewThreads ReviewThread[]
+  refreshTokens RefreshToken[]
+  nudges        Nudge[]
+
+  @@map("users")
+}
+
+model UserDemographics {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ageRange         AgeRange?
+  genderIdentity   String?
+  region           String?   // ISO 3166-1 alpha-2 country + subdivision
+  incomeBracket    IncomeBracket?
+  lifestyleTags    String[]  // ["outdoor", "tech-early-adopter", "budget-conscious", ...]
+  householdSize    Int?
+  hasChildren      Boolean?
+  educationLevel   EducationLevel?
+
+  updatedAt        DateTime  @updatedAt
+
+  @@map("user_demographics")
+}
+
+// ─────────────────────────────────────────
+// PRODUCTS & EXPERIENCES
+// ─────────────────────────────────────────
+
+model Product {
+  id             String    @id @default(cuid())
+  name           String
+  brand          String?
+  category       String    // "electronics", "kitchen", "travel", etc.
+  subcategory    String?
+  description    String?
+  imageUrl       String?
+  websiteUrl     String?
+  priceTier      PriceTier?
+  attributes     Json      @default("{}")  // flexible KV for category-specific attrs
+
+  // External IDs for aggregation
+  amazonAsin     String?   @unique
+  googlePlaceId  String?   @unique
+  yelpId         String?   @unique
+  steamAppId     String?   @unique
+  goodreadsId    String?   @unique
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  createdBy      String?   // user id who added it
+
+  reviewThreads  ReviewThread[]
+  aggregatedReviews AggregatedReview[]
+
+  // Computed fields updated by background jobs
+  avgRatingInitial    Float?
+  avgRatingLongterm   Float?
+  driftScoreAvg       Float?  // negative = products that disappoint over time
+  totalReviewCount    Int     @default(0)
+
+  @@index([category])
+  @@index([brand])
+  @@map("products")
+}
+
+// ─────────────────────────────────────────
+// REVIEW THREADS (groups all stages for one user+product)
+// ─────────────────────────────────────────
+
+model ReviewThread {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  startedAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Computed drift: (latestRating - initialRating), null if only 1 review
+  driftScore    Float?
+  // Stages completed so far
+  stagesCompleted ReviewStage[]
+
+  reviews       Review[]
+  nudges        Nudge[]
+
+  @@unique([userId, productId])
+  @@map("review_threads")
+}
+
+// ─────────────────────────────────────────
+// REVIEWS (individual stage captures)
+// ─────────────────────────────────────────
+
+model Review {
+  id              String        @id @default(cuid())
+  threadId        String
+  thread          ReviewThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  stage           ReviewStage
+  capturedAt      DateTime      @default(now())
+  source          ReviewSource  @default(NATIVE)
+
+  // Scores (1-10 scale for granularity)
+  scoreOverall    Int           // required
+  scoreValue      Int?
+  scoreQuality    Int?
+  scoreLongevity  Int?          // "has it held up?"
+  scoreExpectations Int?        // "met expectations?"
+
+  bodyText        String?
+  pros            String[]
+  cons            String[]
+
+  wouldStillBuy   Boolean?
+  wouldRecommend  Boolean?
+
+  // NLP-computed fields (populated by ML service)
+  sentimentScore  Float?        // -1.0 to 1.0
+  keyTopics       String[]
+  summaryAuto     String?       // auto-generated summary
+
+  // For imported reviews
+  externalId      String?
+  externalUrl     String?
+  externalAuthor  String?
+
+  @@index([threadId])
+  @@index([stage])
+  @@map("reviews")
+}
+
+// ─────────────────────────────────────────
+// AGGREGATED REVIEWS (imported from external sources)
+// ─────────────────────────────────────────
+
+model AggregatedReview {
+  id            String    @id @default(cuid())
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  source        AggregationSource
+  externalId    String
+  authorName    String?
+  rating        Float     // normalized to 1-10
+  bodyText      String?
+  reviewDate    DateTime?
+  verifiedPurchase Boolean @default(false)
+
+  // NLP enrichment
+  sentimentScore  Float?
+  keyTopics       String[]
+  pros            String[]
+  cons            String[]
+
+  importedAt    DateTime  @default(now())
+
+  @@unique([source, externalId])
+  @@map("aggregated_reviews")
+}
+
+// ─────────────────────────────────────────
+// NUDGE SCHEDULER
+// ─────────────────────────────────────────
+
+model Nudge {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threadId      String
+  thread        ReviewThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  targetStage   ReviewStage
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  completedAt   DateTime?
+  status        NudgeStatus @default(PENDING)
+
+  @@index([userId, status])
+  @@index([scheduledFor, status])
+  @@map("nudges")
+}
+
+// ─────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum ReviewStage {
+  INITIAL
+  ONE_WEEK
+  ONE_MONTH
+  THREE_MONTHS
+  SIX_MONTHS
+  ONE_YEAR
+  TWO_YEARS
+  CUSTOM
+}
+
+enum ReviewSource {
+  NATIVE
+  IMPORTED
+}
+
+enum AggregationSource {
+  AMAZON
+  GOOGLE
+  YELP
+  STEAM
+  GOODREADS
+  TRIPADVISOR
+  MANUAL
+}
+
+enum PriceTier {
+  BUDGET
+  MID_RANGE
+  PREMIUM
+  LUXURY
+}
+
+enum AgeRange {
+  AGE_18_24
+  AGE_25_34
+  AGE_35_44
+  AGE_45_54
+  AGE_55_64
+  AGE_65_PLUS
+}
+
+enum IncomeBracket {
+  UNDER_30K
+  RANGE_30_50K
+  RANGE_50_75K
+  RANGE_75_100K
+  RANGE_100_150K
+  OVER_150K
+}
+
+enum EducationLevel {
+  HIGH_SCHOOL
+  SOME_COLLEGE
+  BACHELORS
+  MASTERS
+  DOCTORATE
+  OTHER
+}
+
+enum NudgeStatus {
+  PENDING
+  SENT
+  COMPLETED
+  SKIPPED
+  CANCELLED
+}
