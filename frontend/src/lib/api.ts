@@ -5,10 +5,14 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+const getPersistedAuth = () => {
+  const raw = JSON.parse(localStorage.getItem('verdict-auth') || '{}')
+  return (raw.state || raw) as { accessToken?: string; refreshToken?: string }
+}
+
 // Inject auth token on every request
 api.interceptors.request.use((config) => {
-  // Import here to avoid circular dependency
-  const { accessToken } = JSON.parse(localStorage.getItem('verdict-auth') || '{}')
+  const { accessToken } = getPersistedAuth()
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`
   }
@@ -24,13 +28,15 @@ api.interceptors.response.use(
       original._retry = true
       try {
         const stored = JSON.parse(localStorage.getItem('verdict-auth') || '{}')
-        if (!stored.refreshToken) throw new Error('No refresh token')
+        const storedState = stored.state || stored
+        if (!storedState.refreshToken) throw new Error('No refresh token')
 
-        const res = await axios.post('/api/auth/refresh', { refreshToken: stored.refreshToken })
+        const res = await axios.post('/api/auth/refresh', { refreshToken: storedState.refreshToken })
         const { accessToken, refreshToken } = res.data
 
         // Update store
-        const updated = { ...stored, accessToken, refreshToken }
+        const updatedState = { ...storedState, accessToken, refreshToken }
+        const updated = stored.state ? { ...stored, state: updatedState } : updatedState
         localStorage.setItem('verdict-auth', JSON.stringify(updated))
 
         original.headers.Authorization = `Bearer ${accessToken}`
