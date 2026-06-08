@@ -18,6 +18,6 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     return res.status(409).json({ error: 'Resource already exists' })
   }
 
-  logger.error({ err, path: req.path, method: req.method }, 'Unhandled error')
+  logger.error('Unhandled error', { err, path: req.path, method: req.method })
   res.status(500).json({ error: 'Internal server error' })
 }
