@@ -2,11 +2,9 @@ import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { AppError } from './errorHandler'
 
-declare global {
-  namespace Express {
-    interface Request {
-      userId?: string
-    }
+declare module 'express-serve-static-core' {
+  interface Request {
+    userId?: string
   }
 }
 

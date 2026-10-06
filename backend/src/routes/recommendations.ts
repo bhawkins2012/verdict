@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
+import { logger } from '../lib/logger'
 import { getRecommendations } from '../services/mlClient'
 
 export const recommendationsRouter = Router()
@@ -68,6 +69,7 @@ recommendationsRouter.get('/', authenticate, async (req: Request, res: Response)
 
     res.json({ recommendations: enriched, userId })
   } catch (err) {
+    logger.warn('ML recommendations failed; serving popularity fallback', { err })
     // Fallback: return top-rated products by avg long-term score
     const fallback = await prisma.product.findMany({
       where: {
