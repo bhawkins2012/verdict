@@ -8,7 +8,7 @@
     }
   },
   "postCreateCommand": "npm install && cd frontend && npm install && cd ../backend && npm install && cd ../ml && pip install -r requirements.txt",
-  "postStartCommand": ".devcontainer/start.sh",
+  "postStartCommand": "bash .devcontainer/start.sh",
   "forwardPorts": [5173, 3001, 8000],
   "portsAttributes": {
     "5173": { "label": "Frontend" },

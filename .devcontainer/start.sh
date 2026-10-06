@@ -1,30 +1,23 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# Runs on every Codespace start. Idempotent: safe to run repeatedly.
+set -euo pipefail
+cd "$(dirname "$0")/.."
 
-# Start database and cache
-docker compose up -d
+docker compose up -d postgres redis
 
-# Create backend .env if missing
-if [ ! -f backend/.env ]; then
-  cp backend/.env.example backend/.env
-  sed -i 's/your_password/verdict_dev_password/' backend/.env
-  echo "Created backend/.env"
-fi
+[ -f backend/.env ] || cp backend/.env.example backend/.env
+[ -f frontend/.env ] || cp frontend/.env.example frontend/.env
 
-# Wait for Postgres to be ready
-echo "Waiting for Postgres..."
-until docker exec verdict-postgres pg_isready -U verdict_user -d verdict_db > /dev/null 2>&1; do
-  sleep 1
-done
+node scripts/wait-for-port.js localhost 5432 90
+node scripts/wait-for-port.js localhost 6379 30
 
-# Push schema and seed if the users table is empty
 cd backend
-ROW_COUNT=$(docker exec verdict-postgres psql -U verdict_user -d verdict_db -tAc "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "0")
-if [ "$ROW_COUNT" = "0" ]; then
-  echo "Seeding database..."
-  npx prisma db push --accept-data-loss
+npx prisma migrate deploy
+
+# Seed only an empty database so reloads don't duplicate or overwrite data.
+USERS=$(docker compose exec -T postgres psql -U verdict_user -d verdict_db -tAc 'SELECT COUNT(*) FROM users' | tr -d '[:space:]')
+if [ "$USERS" = "0" ]; then
   npx prisma db seed
 fi
-cd ..
 
-echo "✅ Verdict dev environment ready"
+echo "Verdict dev environment ready. Run: npm run dev"

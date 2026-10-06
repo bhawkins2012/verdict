@@ -58,9 +58,14 @@ cp frontend/.env.example frontend/.env
 
 ```bash
 cd backend
-npx prisma migrate dev --name init
+npx prisma migrate deploy
 npx prisma db seed
 ```
+
+> **Database created earlier with `prisma db push`?** `migrate deploy` fails with `P3005`
+> because that DB has no migration history. Either recreate it (`docker compose down -v && docker compose up -d`),
+> or mark the initial migration as already applied once:
+> `npx prisma migrate resolve --applied 20260101000000_init`.
 
 ### 4. Run Everything
 
