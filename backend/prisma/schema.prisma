@@ -158,6 +158,7 @@ model Review {
   externalUrl     String?
   externalAuthor  String?
 
+  @@unique([threadId, stage])
   @@index([threadId])
   @@index([stage])
   @@map("reviews")

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
-import { ReviewStage, ReviewSource } from '@prisma/client'
+import { Prisma, ReviewStage, ReviewSource } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
@@ -70,16 +70,16 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   if (!product) throw new AppError(404, 'Product not found')
 
   // Upsert the thread
-  let thread = await prisma.reviewThread.findUnique({
+  const thread = await prisma.reviewThread.findUnique({
     where: { userId_productId: { userId, productId } },
     include: { reviews: true }
   })
 
-  if (thread) {
-    // Prevent duplicate stage reviews
-    const hasStage = thread.reviews.some(r => r.stage === stage)
-    if (hasStage) throw new AppError(409, `You already submitted a ${stage} review for this product`)
-  }
+  const duplicateStage = new AppError(409, `You already submitted a ${stage} review for this product`)
+
+  // Fast path with a friendly error. The authoritative check is the
+  // (threadId, stage) unique constraint, which also holds under concurrent requests.
+  if (thread?.reviews.some(r => r.stage === stage)) throw duplicateStage
 
   // NLP enrichment (non-blocking)
   let nlpData: NLPEnrichment = {}
@@ -91,32 +91,40 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     }
   }
 
-  const review = await prisma.$transaction(async (tx) => {
-    // Upsert thread
-    const updatedThread = await tx.reviewThread.upsert({
-      where: { userId_productId: { userId, productId } },
-      create: { userId, productId, stagesCompleted: [stage] },
-      update: { stagesCompleted: { push: stage }, updatedAt: new Date() },
-    })
+  let review
+  try {
+    review = await prisma.$transaction(async (tx) => {
+      // Upsert thread
+      const updatedThread = await tx.reviewThread.upsert({
+        where: { userId_productId: { userId, productId } },
+        create: { userId, productId, stagesCompleted: [stage] },
+        update: { stagesCompleted: { push: stage }, updatedAt: new Date() },
+      })
 
-    // Create review
-    const newReview = await tx.review.create({
-      data: {
-        threadId: updatedThread.id,
-        stage,
-        source: ReviewSource.NATIVE,
-        ...reviewData,
-        sentimentScore: nlpData.sentimentScore,
-        keyTopics: nlpData.keyTopics,
-        summaryAuto: nlpData.summaryAuto,
-      }
+      // Create review. A duplicate stage violates the unique constraint, which
+      // aborts the transaction, so stagesCompleted is rolled back with it.
+      return tx.review.create({
+        data: {
+          threadId: updatedThread.id,
+          stage,
+          source: ReviewSource.NATIVE,
+          ...reviewData,
+          sentimentScore: nlpData.sentimentScore,
+          keyTopics: nlpData.keyTopics,
+          summaryAuto: nlpData.summaryAuto,
+        }
+      })
     })
-
-    return newReview
-  })
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const target = err.meta?.target
+      if (Array.isArray(target) && target.includes('stage')) throw duplicateStage
+    }
+    throw err
+  }
 
   // Compute drift and schedule next nudge (async)
-  computeThreadDrift(thread?.id || review.threadId).catch(console.error)
+  computeThreadDrift(review.threadId).catch(console.error)
   scheduleNudges(review.threadId, stage, userId).catch(console.error)
 
   res.status(201).json(review)
