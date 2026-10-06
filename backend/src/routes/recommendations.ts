@@ -48,7 +48,7 @@ recommendationsRouter.get('/', authenticate, async (req: Request, res: Response)
     const mlRecommendations = await getRecommendations(userFeatures)
 
     // Hydrate with full product data
-    const productIds = mlRecommendations.map((r: any) => r.productId)
+    const productIds = mlRecommendations.map((r) => r.productId)
     const products = await prisma.product.findMany({
       where: { id: { in: productIds } },
       select: {
@@ -60,11 +60,11 @@ recommendationsRouter.get('/', authenticate, async (req: Request, res: Response)
 
     // Merge ML scores with product data, preserve order
     const enriched = mlRecommendations
-      .map((rec: any) => ({
+      .map((rec) => ({
         ...rec,
         product: products.find(p => p.id === rec.productId),
       }))
-      .filter((r: any) => r.product)
+      .filter((r) => r.product)
 
     res.json({ recommendations: enriched, userId })
   } catch (err) {
