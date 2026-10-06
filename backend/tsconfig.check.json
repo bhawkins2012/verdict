@@ -9,6 +9,7 @@
   },
   "include": [
     "src/**/*",
-    "prisma/**/*"
+    "prisma/**/*",
+    "tests/**/*"
   ]
 }
