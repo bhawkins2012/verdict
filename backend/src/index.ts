@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import 'express-async-errors' // must load before any router is created: forwards async handler rejections to errorHandler
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
