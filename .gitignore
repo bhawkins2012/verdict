@@ -36,6 +36,9 @@ ml/data/raw/
 *.pt
 *.pth
 
+# Local service dumps (e.g. Redis)
+*.rdb
+
 # Logs
 logs/
 *.log
