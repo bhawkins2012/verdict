@@ -80,6 +80,40 @@ describe('401 handling', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each(['/auth/login', '/auth/register'])(
+    'a 401 from %s is a credentials error: no refresh attempt, session and page untouched, error reaches the caller',
+    async (url) => {
+      // Regression: a wrong password triggered refresh -> clear storage -> full-page redirect,
+      // so the login form never got to show its error message.
+      persisted({ accessToken: 'stale', refreshToken: 'ref-1', isAuthenticated: true })
+      respond = () => ({ status: 401, data: { error: 'Invalid credentials' } })
+      const refresh = vi.spyOn(axios, 'post').mockResolvedValue({ data: { accessToken: 'new', refreshToken: 'ref-2' } })
+      const location = { href: '/login-form' }
+      vi.stubGlobal('location', location)
+
+      await expect(api.post(url, { email: 'a@b.c', password: 'x' })).rejects.toMatchObject({
+        response: { status: 401, data: { error: 'Invalid credentials' } },
+      })
+
+      expect(refresh).not.toHaveBeenCalled()
+      expect(seen).toHaveLength(1)
+      expect(location.href).toBe('/login-form')
+      expect(localStorage.getItem(KEY)).not.toBeNull()
+      vi.unstubAllGlobals()
+    }
+  )
+
+  it('still refreshes on a 401 from /auth/me (an expired access token, not a credentials error)', async () => {
+    persisted({ accessToken: 'old', refreshToken: 'ref-1' })
+    respond = (_c, call) => (call === 1 ? { status: 401 } : { status: 200, data: { email: 'a@b.c' } })
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { accessToken: 'new', refreshToken: 'ref-2' } })
+
+    const res = await api.get('/auth/me')
+
+    expect(res.data).toEqual({ email: 'a@b.c' })
+    expect(seen.map(s => s.authorization)).toEqual(['Bearer old', 'Bearer new'])
+  })
+
   it('does not loop: a request that is still 401 after the retry is rejected', async () => {
     persisted({ accessToken: 'old', refreshToken: 'ref-1' })
     respond = () => ({ status: 401 })
