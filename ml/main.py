@@ -10,7 +10,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from dataclasses import asdict
+from pathlib import Path
 import uvicorn
+from dotenv import load_dotenv
+
+# Share the backend's DATABASE_URL in local dev. Real environment variables win (override=False).
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env", override=False)
 
 from models.recommender import RecommendationEngine
 from models.nlp import NLPEnricher
@@ -105,7 +111,7 @@ async def recommend(req: RecommendRequest):
             limit=req.limit,
         )
         return RecommendResponse(
-            recommendations=recs,
+            recommendations=[asdict(r) for r in recs],
             modelVersion=recommender.version,
             userId=req.userId,
         )
