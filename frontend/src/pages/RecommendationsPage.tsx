@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { Recommendation } from '../types'
 import { DriftBadge } from '../components/ui/DriftBadge'
-import { ScoreRing } from '../components/ui/ScoreRing'
 import { TrendingUp, Sparkles, ArrowRight, UserCheck } from 'lucide-react'
 import clsx from 'clsx'
 

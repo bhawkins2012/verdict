@@ -17,7 +17,7 @@ export function DiscoverPage() {
     staleTime: 30_000,
   })
 
-  const { data: categories } = useQuery({
+  const { data: categories } = useQuery<{ name: string; count: number }[]>({
     queryKey: ['categories'],
     queryFn: () => api.get('/products/categories/list').then(r => r.data),
   })
@@ -55,7 +55,7 @@ export function DiscoverPage() {
         >
           All
         </button>
-        {categories?.map((c: any) => (
+        {categories?.map((c) => (
           <button
             key={c.name}
             onClick={() => setCategory(c.name === category ? '' : c.name)}

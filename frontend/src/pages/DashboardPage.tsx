@@ -1,13 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { ReviewThread, Nudge, STAGE_LABELS } from '../types'
+import { ReviewThread, ReviewStage, Nudge, STAGE_LABELS } from '../types'
 import { useAuthStore } from '../store/authStore'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { ScoreRing } from '../components/ui/ScoreRing'
-import { format, formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow } from 'date-fns'
 import { ArrowRight, Clock, CheckCircle2, Sparkles, Plus } from 'lucide-react'
 import clsx from 'clsx'
+
+const TRACKED_STAGES: ReviewStage[] = ['INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR']
 
 export function DashboardPage() {
   const { user } = useAuthStore()
@@ -183,12 +185,12 @@ function ThreadCard({ thread }: { thread: ReviewThread }) {
 
         {/* Stage progress */}
         <div className="flex gap-1 mt-3">
-          {['INITIAL','ONE_WEEK','ONE_MONTH','THREE_MONTHS','SIX_MONTHS','ONE_YEAR'].map(stage => (
+          {TRACKED_STAGES.map(stage => (
             <div
               key={stage}
               className={clsx(
                 'h-1.5 rounded-full flex-1',
-                thread.stagesCompleted?.includes(stage as any)
+                thread.stagesCompleted?.includes(stage)
                   ? 'bg-ink-800'
                   : 'bg-ink-200'
               )}
