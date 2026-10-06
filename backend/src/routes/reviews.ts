@@ -6,7 +6,7 @@ import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
 import { scheduleNudges } from '../jobs/nudgeScheduler'
 import { computeThreadDrift } from '../services/driftService'
-import { enrichReviewWithNLP } from '../services/mlClient'
+import { enrichReviewWithNLP, NLPEnrichment } from '../services/mlClient'
 
 export const reviewsRouter = Router()
 
@@ -82,7 +82,7 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   }
 
   // NLP enrichment (non-blocking)
-  let nlpData: any = {}
+  let nlpData: NLPEnrichment = {}
   if (reviewData.bodyText) {
     try {
       nlpData = await enrichReviewWithNLP(reviewData.bodyText)
@@ -106,7 +106,9 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
         stage,
         source: ReviewSource.NATIVE,
         ...reviewData,
-        ...nlpData,
+        sentimentScore: nlpData.sentimentScore,
+        keyTopics: nlpData.keyTopics,
+        summaryAuto: nlpData.summaryAuto,
       }
     })
 
