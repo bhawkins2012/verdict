@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express'
+import { randomUUID } from 'crypto'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { z } from 'zod'
@@ -24,12 +25,12 @@ function signTokens(userId: string) {
   const accessToken = jwt.sign(
     { sub: userId },
     process.env.JWT_SECRET!,
-    { expiresIn: (process.env.JWT_EXPIRES_IN || '15m') as jwt.SignOptions['expiresIn'] }
+    { expiresIn: (process.env.JWT_EXPIRES_IN || '15m') as jwt.SignOptions['expiresIn'], jwtid: randomUUID() }
   )
   const refreshToken = jwt.sign(
     { sub: userId },
     process.env.JWT_REFRESH_SECRET!,
-    { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || '30d') as jwt.SignOptions['expiresIn'] }
+    { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || '30d') as jwt.SignOptions['expiresIn'], jwtid: randomUUID() }
   )
   return { accessToken, refreshToken }
 }
@@ -96,9 +97,11 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   const { refreshToken } = req.body
   if (!refreshToken) throw new AppError(401, 'Refresh token required')
 
-  let payload: any
+  let userId: string
   try {
-    payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!)
+    const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!)
+    if (typeof payload === 'string' || !payload.sub) throw new Error('Malformed refresh token')
+    userId = payload.sub
   } catch {
     throw new AppError(401, 'Invalid or expired refresh token')
   }
@@ -106,12 +109,14 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   const stored = await prisma.refreshToken.findUnique({ where: { token: refreshToken } })
   if (!stored || stored.expiresAt < new Date()) throw new AppError(401, 'Refresh token expired')
 
-  // Rotate refresh token
-  await prisma.refreshToken.delete({ where: { token: refreshToken } })
-  const tokens = signTokens(payload.sub)
+  // Rotate: claim the old token atomically so a concurrent or repeated use gets 401, not a 500
+  const { count } = await prisma.refreshToken.deleteMany({ where: { token: refreshToken } })
+  if (count === 0) throw new AppError(401, 'Refresh token already used')
+
+  const tokens = signTokens(userId)
   await prisma.refreshToken.create({
     data: {
-      userId: payload.sub,
+      userId,
       token: tokens.refreshToken,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     }
