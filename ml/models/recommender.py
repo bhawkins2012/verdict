@@ -87,21 +87,21 @@ class RecommendationEngine:
             conn = await asyncpg.connect(db_url)
             rows = await conn.fetch("""
                 SELECT
-                    rt.user_id,
-                    rt.product_id,
-                    r.stage,
-                    r.score_overall,
-                    ud.age_range,
-                    ud.income_bracket,
-                    ud.gender_identity,
-                    ud.has_children,
-                    ud.lifestyle_tags,
-                    ud.region
+                    rt."userId"          AS user_id,
+                    rt."productId"       AS product_id,
+                    r.stage::text        AS stage,
+                    r."scoreOverall"     AS score_overall,
+                    ud."ageRange"::text  AS age_range,
+                    ud."incomeBracket"::text AS income_bracket,
+                    ud."genderIdentity"  AS gender_identity,
+                    ud."hasChildren"     AS has_children,
+                    ud."lifestyleTags"   AS lifestyle_tags,
+                    ud.region            AS region
                 FROM reviews r
-                JOIN review_threads rt ON r.thread_id = rt.id
-                LEFT JOIN user_demographics ud ON ud.user_id = rt.user_id
+                JOIN review_threads rt ON r."threadId" = rt.id
+                LEFT JOIN user_demographics ud ON ud."userId" = rt."userId"
                 WHERE r.source = 'NATIVE'
-                ORDER BY r.captured_at
+                ORDER BY r."capturedAt"
             """)
             await conn.close()
             self._build_matrices(rows)

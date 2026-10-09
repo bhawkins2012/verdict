@@ -8,12 +8,12 @@ export function startNudgeWorker() {
   const url = new URL(REDIS_URL)
 
   const worker = new Worker('nudges', async (job: Job) => {
-    const { nudgeId, userId, threadId, stage } = job.data
-    logger.info({ nudgeId, stage }, 'Processing nudge')
+    const { nudgeId, userId, stage } = job.data
+    logger.info('Processing nudge', { nudgeId, stage })
 
     const nudge = await prisma.nudge.findUnique({ where: { id: nudgeId } })
     if (!nudge || nudge.status !== 'PENDING') {
-      logger.info({ nudgeId }, 'Nudge already processed or cancelled, skipping')
+      logger.info('Nudge already processed or cancelled, skipping', { nudgeId })
       return
     }
 
@@ -26,7 +26,7 @@ export function startNudgeWorker() {
     // TODO: Send actual notification (email/push)
     // For now, the nudge record in DB acts as the notification source
     // The frontend polls /api/nudges for pending items
-    logger.info({ nudgeId, userId, stage }, 'Nudge marked as sent')
+    logger.info('Nudge marked as sent', { nudgeId, userId, stage })
 
   }, {
     connection: { host: url.hostname, port: parseInt(url.port || '6379') },
@@ -34,7 +34,7 @@ export function startNudgeWorker() {
   })
 
   worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'Nudge job failed')
+    logger.error('Nudge job failed', { jobId: job?.id, err })
   })
 
   return worker

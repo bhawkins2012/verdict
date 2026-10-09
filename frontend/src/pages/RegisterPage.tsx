@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
@@ -16,8 +17,8 @@ export function RegisterPage() {
     try {
       await register(form)
       navigate('/profile') // Send to profile to fill demographics
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Registration failed')
+    } catch (err) {
+      setError((axios.isAxiosError<{ error?: string }>(err) && err.response?.data?.error) || 'Registration failed')
     } finally {
       setLoading(false)
     }

@@ -1,5 +1,5 @@
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart
 } from 'recharts'
 import { STAGE_LABELS, ReviewStage } from '../../types'
@@ -15,12 +15,31 @@ interface Props {
   showUserLine?: { stage: ReviewStage; score: number }[]
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface TooltipEntry {
+  dataKey: string
+  name: string
+  value: number | string
+  color: string
+  payload: { count?: number }
+}
+
+interface TooltipProps {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string
+}
+
+interface ChartPoint extends DataPoint {
+  stageLabel: string
+  userScore?: number
+}
+
+const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
   if (!active || !payload?.length) return null
   return (
     <div className="bg-white border border-ink-200 rounded-xl p-3 shadow-lg text-sm">
       <p className="font-medium text-ink-800 mb-1">{STAGE_LABELS[label as ReviewStage] || label}</p>
-      {payload.map((p: any) => (
+      {payload.map((p) => (
         <p key={p.dataKey} style={{ color: p.color }} className="text-xs">
           {p.name}: <strong>{typeof p.value === 'number' ? p.value.toFixed(1) : p.value}</strong>
           {p.dataKey === 'avgScore' && p.payload.count && (
@@ -33,20 +52,15 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 }
 
 export function SurvivorshipChart({ data, showUserLine }: Props) {
-  const chartData = data.map(d => ({
+  // Merge the user's own line if provided
+  const userMap: Partial<Record<ReviewStage, number>> = showUserLine
+    ? Object.fromEntries(showUserLine.map(r => [r.stage, r.score]))
+    : {}
+  const chartData: ChartPoint[] = data.map(d => ({
     ...d,
     stageLabel: STAGE_LABELS[d.stage] || d.stage,
+    userScore: userMap[d.stage],
   }))
-
-  // Merge user line if provided
-  if (showUserLine) {
-    const userMap = Object.fromEntries(showUserLine.map(r => [r.stage, r.score]))
-    chartData.forEach(d => {
-      if (userMap[d.stage] !== undefined) {
-        (d as any).userScore = userMap[d.stage]
-      }
-    })
-  }
 
   const minScore = Math.max(0, Math.min(...data.map(d => d.avgScore)) - 1)
   const maxScore = Math.min(10, Math.max(...data.map(d => d.avgScore)) + 1)

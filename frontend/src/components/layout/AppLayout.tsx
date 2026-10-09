@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Compass, Star, Bell, User, LogOut, TrendingUp } from 'lucide-react'
+import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../../lib/api'

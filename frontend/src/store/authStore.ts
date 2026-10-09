@@ -8,7 +8,7 @@ interface User {
   username: string
   displayName?: string
   avatarUrl?: string
-  demographics?: any
+  demographics?: Record<string, unknown>
 }
 
 interface AuthState {

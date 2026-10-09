@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
-import { CheckCircle2, User } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 
 const AGE_RANGES = [
@@ -30,8 +30,18 @@ const LIFESTYLE_OPTIONS = [
   'pet-owner', 'remote-work', 'student',
 ]
 
+interface DemographicsPayload {
+  ageRange?: string
+  genderIdentity?: string
+  region?: string
+  incomeBracket?: string
+  lifestyleTags: string[]
+  householdSize?: number
+  hasChildren?: boolean
+}
+
 export function ProfilePage() {
-  const { user, setUser } = useAuthStore()
+  const { user } = useAuthStore()
   const queryClient = useQueryClient()
   const [saved, setSaved] = useState(false)
 
@@ -50,23 +60,25 @@ export function ProfilePage() {
     hasChildren: '',
   })
 
-  useEffect(() => {
-    if (me?.demographics) {
-      const d = me.demographics
-      setForm({
-        ageRange: d.ageRange || '',
-        genderIdentity: d.genderIdentity || '',
-        region: d.region || '',
-        incomeBracket: d.incomeBracket || '',
-        lifestyleTags: d.lifestyleTags || [],
-        householdSize: d.householdSize?.toString() || '',
-        hasChildren: d.hasChildren === true ? 'true' : d.hasChildren === false ? 'false' : '',
-      })
-    }
-  }, [me])
+  // Seed the form once per fetched profile. Adjusting state during render (rather than in an
+  // effect) is React's pattern for deriving state from changing data without a cascading render.
+  const [seededFrom, setSeededFrom] = useState<unknown>(null)
+  if (me?.demographics && seededFrom !== me) {
+    const d = me.demographics
+    setSeededFrom(me)
+    setForm({
+      ageRange: d.ageRange || '',
+      genderIdentity: d.genderIdentity || '',
+      region: d.region || '',
+      incomeBracket: d.incomeBracket || '',
+      lifestyleTags: d.lifestyleTags || [],
+      householdSize: d.householdSize?.toString() || '',
+      hasChildren: d.hasChildren === true ? 'true' : d.hasChildren === false ? 'false' : '',
+    })
+  }
 
   const { mutate: save, isPending } = useMutation({
-    mutationFn: (data: any) => api.put('/users/me/demographics', data),
+    mutationFn: (data: DemographicsPayload) => api.put('/users/me/demographics', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['me'] })
       setSaved(true)

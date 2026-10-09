@@ -6,7 +6,7 @@ import { DriftBadge } from '../components/ui/DriftBadge'
 import { ScoreRing } from '../components/ui/ScoreRing'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
 import { format } from 'date-fns'
-import { Plus, ThumbsUp, ThumbsDown, ArrowLeft, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { Plus, ThumbsUp, ThumbsDown, ArrowLeft, TrendingDown, TrendingUp } from 'lucide-react'
 import clsx from 'clsx'
 
 export function ReviewThreadPage() {

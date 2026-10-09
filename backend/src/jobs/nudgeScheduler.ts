@@ -2,7 +2,6 @@ import { Queue } from 'bullmq'
 import { ReviewStage } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
-import { addWeeks, addMonths } from 'date-fns'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
 
@@ -58,9 +57,9 @@ export async function scheduleNudges(
       attempts: 3,
       backoff: { type: 'exponential', delay: 60000 },
     })
-    logger.info({ nudgeId: nudge.id, stage: next.stage, scheduledFor }, 'Nudge scheduled')
+    logger.info('Nudge scheduled', { nudgeId: nudge.id, stage: next.stage, scheduledFor })
   } catch (err) {
-    logger.warn({ err }, 'Failed to enqueue nudge (Redis may not be available)')
+    logger.warn('Failed to enqueue nudge (Redis may not be available)', { err })
     // Nudge is still in DB — can be picked up by cron fallback
   }
 }

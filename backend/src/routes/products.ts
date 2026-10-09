@@ -1,11 +1,15 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
-import { PriceTier } from '@prisma/client'
+import { Prisma, PriceTier } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
 
 export const productsRouter = Router()
+
+const jsonValueSchema: z.ZodType<Prisma.InputJsonValue> = z.lazy(() =>
+  z.union([z.string(), z.number(), z.boolean(), z.array(jsonValueSchema), z.record(jsonValueSchema)])
+)
 
 const createProductSchema = z.object({
   name: z.string().min(1).max(200),
@@ -16,7 +20,7 @@ const createProductSchema = z.object({
   imageUrl: z.string().url().optional(),
   websiteUrl: z.string().url().optional(),
   priceTier: z.nativeEnum(PriceTier).optional(),
-  attributes: z.record(z.unknown()).optional(),
+  attributes: z.record(jsonValueSchema).optional(),
   amazonAsin: z.string().optional(),
 })
 
@@ -25,7 +29,7 @@ productsRouter.get('/', async (req: Request, res: Response) => {
   const { q, category, brand, page = '1', limit = '20' } = req.query as Record<string, string>
   const skip = (parseInt(page) - 1) * parseInt(limit)
 
-  const where: any = {}
+  const where: Prisma.ProductWhereInput = {}
   if (q) {
     where.OR = [
       { name: { contains: q, mode: 'insensitive' } },

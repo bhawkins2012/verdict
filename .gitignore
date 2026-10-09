@@ -25,7 +25,6 @@ __pycache__/
 venv/
 env/
 *.egg-info/
-dist/
 .eggs/
 
 # ML artifacts
@@ -36,6 +35,9 @@ ml/data/raw/
 *.h5
 *.pt
 *.pth
+
+# Local service dumps (e.g. Redis)
+*.rdb
 
 # Logs
 logs/
@@ -58,8 +60,8 @@ coverage/
 htmlcov/
 .pytest_cache/
 
-# Prisma
-backend/prisma/migrations/*.sql
-
 # TypeScript
 *.tsbuildinfo
+
+# Stray archives (uploads/exports)
+*.zip

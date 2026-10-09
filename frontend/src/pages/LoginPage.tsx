@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
@@ -17,8 +18,8 @@ export function LoginPage() {
     try {
       await login(email, password)
       navigate('/dashboard')
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Invalid credentials')
+    } catch (err) {
+      setError((axios.isAxiosError<{ error?: string }>(err) && err.response?.data?.error) || 'Invalid credentials')
     } finally {
       setLoading(false)
     }

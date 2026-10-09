@@ -1,0 +1,18 @@
+{
+  "name": "Verdict",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    }
+  },
+  "postCreateCommand": "npm install && cd frontend && npm install && cd ../backend && npm install && cd ../ml && pip install -r requirements.txt",
+  "postStartCommand": "bash .devcontainer/start.sh",
+  "forwardPorts": [5173, 3001, 8000],
+  "portsAttributes": {
+    "5173": { "label": "Frontend" },
+    "3001": { "label": "Backend API" },
+    "8000": { "label": "ML Service" }
+  }
+}

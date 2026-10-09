@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { Product, ReviewThread } from '../types'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
-import { ArrowLeft, Star, ExternalLink, Plus } from 'lucide-react'
+import { ArrowLeft, Star, Plus } from 'lucide-react'
 
 export function ProductPage() {
   const { id } = useParams<{ id: string }>()

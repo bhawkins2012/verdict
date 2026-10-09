@@ -34,7 +34,7 @@ cd ..
 # Copy env files
 if [ ! -f backend/.env ]; then
   cp backend/.env.example backend/.env
-  echo "📝 Created backend/.env — update DATABASE_URL and secrets before running!"
+  echo "📝 Created backend/.env from .env.example (dev defaults, localhost)"
 fi
 
 if [ ! -f frontend/.env ]; then
@@ -46,12 +46,12 @@ if command -v docker >/dev/null 2>&1; then
   echo "🐳 Starting Postgres and Redis..."
   docker compose up -d
   echo "⏳ Waiting for Postgres to be ready..."
-  sleep 5
+  node scripts/wait-for-port.js localhost 5432 90
 fi
 
 # Run migrations & seed
 echo "🗄️  Running database migrations..."
-cd backend && npx prisma migrate dev --name init && cd ..
+cd backend && npx prisma migrate deploy && cd ..
 
 echo "🌱 Seeding database..."
 cd backend && npx prisma db seed && cd ..

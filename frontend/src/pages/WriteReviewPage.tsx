@@ -14,6 +14,18 @@ const SCORE_DIMENSIONS = [
   { key: 'scoreExpectations', label: 'Expectations', required: false, description: 'Did it meet your expectations?' },
 ]
 
+interface ReviewPayload {
+  productId?: string
+  stage: ReviewStage
+  scoreOverall?: number
+  bodyText?: string
+  pros: string[]
+  cons: string[]
+  wouldStillBuy?: boolean
+  wouldRecommend?: boolean
+  [score: string]: unknown
+}
+
 export function WriteReviewPage() {
   const { id: productId } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
@@ -21,7 +33,6 @@ export function WriteReviewPage() {
   const queryClient = useQueryClient()
 
   const stage = (searchParams.get('stage') || 'INITIAL') as ReviewStage
-  const nudgeId = searchParams.get('nudgeId')
 
   const [scores, setScores] = useState<Record<string, number>>({ scoreOverall: 0 })
   const [bodyText, setBodyText] = useState('')
@@ -37,7 +48,7 @@ export function WriteReviewPage() {
   })
 
   const { mutate: submit, isPending } = useMutation({
-    mutationFn: (data: any) => api.post('/reviews', data),
+    mutationFn: (data: ReviewPayload) => api.post('/reviews', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['threads'] })
       queryClient.invalidateQueries({ queryKey: ['thread', productId] })

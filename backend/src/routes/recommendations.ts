@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
+import { logger } from '../lib/logger'
 import { getRecommendations } from '../services/mlClient'
 
 export const recommendationsRouter = Router()
@@ -48,7 +49,7 @@ recommendationsRouter.get('/', authenticate, async (req: Request, res: Response)
     const mlRecommendations = await getRecommendations(userFeatures)
 
     // Hydrate with full product data
-    const productIds = mlRecommendations.map((r: any) => r.productId)
+    const productIds = mlRecommendations.map((r) => r.productId)
     const products = await prisma.product.findMany({
       where: { id: { in: productIds } },
       select: {
@@ -60,14 +61,15 @@ recommendationsRouter.get('/', authenticate, async (req: Request, res: Response)
 
     // Merge ML scores with product data, preserve order
     const enriched = mlRecommendations
-      .map((rec: any) => ({
+      .map((rec) => ({
         ...rec,
         product: products.find(p => p.id === rec.productId),
       }))
-      .filter((r: any) => r.product)
+      .filter((r) => r.product)
 
     res.json({ recommendations: enriched, userId })
   } catch (err) {
+    logger.warn('ML recommendations failed; serving popularity fallback', { err })
     // Fallback: return top-rated products by avg long-term score
     const fallback = await prisma.product.findMany({
       where: {

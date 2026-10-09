@@ -24,7 +24,10 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config
-    if (err.response?.status === 401 && !original._retry) {
+    // Endpoints that answer "wrong credentials" with 401 must not trigger the session-refresh flow:
+    // it would wipe storage and hard-redirect, discarding the form's error message.
+    const isCredentialCheck = ['/auth/login', '/auth/register'].includes(original?.url)
+    if (err.response?.status === 401 && !original._retry && !isCredentialCheck) {
       original._retry = true
       try {
         const stored = JSON.parse(localStorage.getItem('verdict-auth') || '{}')
