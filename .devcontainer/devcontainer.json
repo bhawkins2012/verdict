@@ -1,14 +1,25 @@
 {
   "name": "Verdict",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+
+  // Pinned to bookworm. The floating `22` tag moved to Debian trixie, where the docker-in-docker
+  // feature's default `moby: true` cannot install, which fails image build and sends the codespace
+  // into recovery mode.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22-bookworm",
+
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
-    "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.11"
-    }
+    // `moby: false` installs Docker CE instead of Moby, so this does not depend on Moby packages.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.11" }
   },
-  "postCreateCommand": "npm install && cd frontend && npm install && cd ../backend && npm install && cd ../ml && pip install -r requirements.txt",
+
+  // Dependency installs only. The script reports failures but always exits 0.
+  "onCreateCommand": "bash .devcontainer/install-deps.sh",
+
+  // Everything fallible (docker compose, migrate, seed) lives here. It prints a clear message on
+  // failure and always exits 0, so the container comes up and you can fix things from a shell.
+  // Diagnose with: bash scripts/doctor.sh
   "postStartCommand": "bash .devcontainer/start.sh",
+
   "forwardPorts": [5173, 3001, 8000],
   "portsAttributes": {
     "5173": { "label": "Frontend" },
