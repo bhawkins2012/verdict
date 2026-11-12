@@ -63,9 +63,18 @@ npx prisma db seed
 ```
 
 > **Database created earlier with `prisma db push`?** `migrate deploy` fails with `P3005`
-> because that DB has no migration history. Either recreate it (`docker compose down -v && docker compose up -d`),
-> or mark the initial migration as already applied once:
-> `npx prisma migrate resolve --applied 20260101000000_init`.
+> because that DB has no migration history. It is a dev database, so the easiest fix is to recreate it:
+> `docker compose down -v && docker compose up -d` (the next start migrates and reseeds).
+>
+> To keep the data instead, mark each migration the database *already contains* as applied, then deploy the rest:
+>
+> - pushed from an older schema (no `reviews_threadId_stage_key` index yet):
+>   `npx prisma migrate resolve --applied 20260101000000_init`, then `npx prisma migrate deploy`
+>   (this applies the unique-index migration, which fails if you have duplicate review stages).
+> - pushed from the current schema: also run
+>   `npx prisma migrate resolve --applied 20260102000000_review_unique_thread_stage`.
+>
+> If a migration already failed halfway, run `npx prisma migrate resolve --rolled-back <migration-name>` first.
 
 ### 4. Run Everything
 

@@ -24,7 +24,8 @@ Run from the repo root unless noted. Postgres/Redis: `docker compose up -d`.
 
 | Task | Command |
 |---|---|
-| First-time setup | `bash scripts/setup.sh` (or let the devcontainer's `.devcontainer/start.sh` do it) |
+| First-time setup | `bash scripts/setup.sh` (the devcontainer does the equivalent automatically, see Environment) |
+| Check the environment | `bash scripts/doctor.sh` (Docker, ports 5432/6379, env files, dependencies, migrations, seed) |
 | Dev (all three services) | `npm run dev` (needs `uvicorn` on `PATH`; use the `ml/.venv` or install requirements globally) |
 | Build | `npm run build` |
 | Typecheck | `npm run typecheck` (backend + frontend; ML has none) |
@@ -40,9 +41,13 @@ Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `
 ## Environment
 
 - **One env template, localhost only.** `backend/.env.example` is a working dev default (credentials match `docker-compose.yml`); `cp backend/.env.example backend/.env`. No hostname patching or `sed`. `.env` files are gitignored; never commit one.
-- Devcontainer/Codespaces uses Docker-in-Docker and the same `localhost` URLs.
+- Devcontainer/Codespaces uses Docker-in-Docker and the same `localhost` URLs. Lifecycle split (`.devcontainer/devcontainer.json`):
+  - `onCreateCommand` runs `install-deps.sh`: dependency installs only.
+  - `postStartCommand` runs `start.sh`: `docker compose up`, wait for ports, `migrate deploy`, seed if empty.
+  - **Both scripts always exit 0**, printing a clear summary of what failed, so a flaky pull/install can never put the codespace into recovery mode. If the summary reports problems, run `bash scripts/doctor.sh`, fix the cause, and re-run `bash .devcontainer/start.sh`.
+  - The base image is pinned to `javascript-node:22-bookworm` and the docker-in-docker feature uses `"moby": false`. The floating `22` tag moved to Debian trixie, where the feature's default Moby install aborts and the container fails to build.
 - Always use `prisma migrate deploy` in scripts and CI. `migrate dev` is interactive and only for authoring migrations.
-- A database created earlier with `prisma db push` has no migration history, so `migrate deploy` fails with `P3005`. Recreate it (`docker compose down -v`) or run `npx prisma migrate resolve --applied 20260101000000_init` once.
+- A database created earlier with `prisma db push` has no migration history, so `migrate deploy` fails with `P3005`. Recreate it (`docker compose down -v && docker compose up -d`), or baseline it by hand; which migrations to mark applied depends on the schema it was pushed from, see the README.
 - Backend tests use a separate Postgres schema (`?schema=test`) in the same database and apply migrations in Jest `globalSetup`. Override with `TEST_DATABASE_URL`. They need Postgres but not Redis or the ML service (both mocked).
 - Wait for services with `node scripts/wait-for-port.js <host> <port>`, not `pg_isready` (not installed in the devcontainer).
 
