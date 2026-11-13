@@ -20,6 +20,10 @@
   // Diagnose with: bash scripts/doctor.sh
   "postStartCommand": "bash .devcontainer/start.sh",
 
+  // Re-print the outcome of the last start whenever you attach (start.sh also adds a hook so every
+  // new terminal shows it). The summary lives in .devcontainer/last-start.log.
+  "postAttachCommand": "bash .devcontainer/show-last-start.sh",
+
   "forwardPorts": [5173, 3001, 8000],
   "portsAttributes": {
     "5173": { "label": "Frontend" },
