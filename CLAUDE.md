@@ -66,6 +66,14 @@ Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `
 - ML: return plain dicts/pydantic models from endpoints, not dataclass instances; SQL must quote Prisma's camelCase columns (`"userId"`).
 - Commits are small and single-purpose; bug fixes ship with a regression test that fails without the fix.
 
+## Agents
+
+Project subagents live in `.claude/agents/`. Their tool lists limit which tools they get, not which paths they touch; the path rules are in each definition.
+
+- **architect**: before changing the schema, an API contract, a job or a service boundary; writes ADRs/designs in `docs/` only.
+- **qa**: after implementing a feature or fix; writes and runs tests (test files only) and mutation-checks every fix.
+- **reviewer**: before opening or merging a PR; read-only review of the diff against this file (logic, security, missing tests, unverified claims).
+
 ## Definition of done
 
 A change is done when, locally and in CI (`Backend`, `Frontend`, `ML` checks green):
