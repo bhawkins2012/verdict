@@ -11,10 +11,14 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U verdict_user -d verdict_db"]
+      # -h 127.0.0.1 forces a TCP check. Without it pg_isready uses the unix socket, and on first boot
+      # the image's temporary init server listens on the socket only, so the container would report
+      # healthy before Postgres is reachable over TCP (and `up --wait` would return early).
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U verdict_user -d verdict_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
