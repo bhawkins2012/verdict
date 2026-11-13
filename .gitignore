@@ -39,6 +39,10 @@ ml/data/raw/
 # Local service dumps (e.g. Redis)
 *.rdb
 
+# Devcontainer start summary (local, per-codespace)
+.devcontainer/last-start.log
+.devcontainer/last-start.log.tmp
+
 # Logs
 logs/
 *.log

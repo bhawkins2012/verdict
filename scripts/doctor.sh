@@ -16,11 +16,22 @@ port_open() { node scripts/wait-for-port.js localhost "$1" 2 >/dev/null 2>&1; }
 
 echo "Verdict doctor"
 echo
+if [ -f .devcontainer/last-start.log ]; then
+  printf '%slast start:%s %s\n\n' "$D" "$N" "$(head -n 1 .devcontainer/last-start.log)"
+fi
 
 # ── Ports (checked first: they decide how serious a Docker problem is) ─────────────────────────
-pg_up=0; redis_up=0
-port_open 5432 && pg_up=1
+pg_up=0; redis_up=0; pg_tcp=0
+port_open 5432 && pg_tcp=1
 port_open 6379 && redis_up=1
+# Postgres counts as up only if it answers a real query with backend/.env's DATABASE_URL: a published
+# Docker port accepts TCP before Postgres is ready behind it.
+pg_probe_out=""
+if [ -d backend/node_modules ]; then
+  pg_probe_out=$(node scripts/wait-for-postgres.js 4 2>&1) && pg_up=1
+elif [ "$pg_tcp" -eq 1 ]; then
+  pg_up=1   # cannot probe without the backend's dependencies; fall back to the TCP result
+fi
 
 # ── Docker ─────────────────────────────────────────────────────────────────────────────────────
 docker_ok=0
@@ -48,8 +59,10 @@ else
   done
 fi
 
-if [ "$pg_up" -eq 1 ]; then ok "Postgres accepting connections on localhost:5432"
-else fail "Postgres not reachable on localhost:5432" "docker compose up -d postgres  (then: node scripts/wait-for-port.js localhost 5432)"; fi
+if [ "$pg_up" -eq 1 ]; then ok "Postgres answers queries with DATABASE_URL (localhost:5432)"
+elif [ "$pg_tcp" -eq 1 ]; then
+  fail "Port 5432 accepts connections but Postgres is not answering with DATABASE_URL ($(printf '%s\n' "$pg_probe_out" | tail -n 1 | cut -c1-110))" "if the container is still starting, wait and re-run; else check 'docker compose logs postgres' and the credentials in backend/.env"
+else fail "Postgres not reachable on localhost:5432" "docker compose up -d postgres  (then: node scripts/wait-for-postgres.js)"; fi
 if [ "$redis_up" -eq 1 ]; then ok "Redis accepting connections on localhost:6379"
 else fail "Redis not reachable on localhost:6379" "docker compose up -d redis"; fi
 
