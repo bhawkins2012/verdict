@@ -15,8 +15,13 @@ import { nudgesRouter } from './routes/nudges'
 import { errorHandler } from './middleware/errorHandler'
 import { setupSwagger } from './lib/swagger'
 import { logger } from './lib/logger'
+import { parseTrustProxy } from './lib/trustProxy'
 
 export const app = express()
+
+// Behind a reverse proxy the client address is in X-Forwarded-For. Tell Express how many proxy hops to
+// trust (TRUST_PROXY, default 1) so req.ip, and therefore rate limiting, is per client rather than per proxy.
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY))
 
 // ── Security & Middleware ──────────────────────────────────
 app.use(helmet())
@@ -30,7 +35,7 @@ app.use(express.json({ limit: '10mb' }))
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
+  max: Number(process.env.RATE_LIMIT_MAX) || 200,
   standardHeaders: true,
   legacyHeaders: false,
 })
