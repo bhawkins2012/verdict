@@ -80,9 +80,13 @@ export interface Nudge {
   userId: string
   threadId: string
   targetStage: ReviewStage
-  scheduledFor: string
+  scheduledFor: string // due date
+  sendAt?: string
   sentAt?: string
-  status: 'PENDING' | 'SENT' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED'
+  status: 'PENDING' | 'SENDING' | 'SENT' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED' | 'FAILED'
+  channel?: 'EMAIL' | 'IN_APP' | null
+  snoozedUntil?: string | null
+  snoozeCount?: number
   thread?: ReviewThread
 }
 
