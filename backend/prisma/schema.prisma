@@ -27,6 +27,12 @@ model User {
   updatedAt     DateTime @updatedAt
   emailVerified Boolean  @default(false)
 
+  // Nudge preferences (docs/adr-nudges.md D5). Email is opt-in: off until the user turns it on.
+  emailNudgesEnabled   Boolean   @default(false)
+  emailNudgesConsentAt DateTime?
+  timezone             String    @default("UTC") // IANA name, e.g. "Europe/Berlin"
+  nudgeSendHour        Int       @default(9) // 0-23, local to `timezone`
+
   demographics  UserDemographics?
   reviewThreads ReviewThread[]
   refreshTokens RefreshToken[]
@@ -36,20 +42,20 @@ model User {
 }
 
 model UserDemographics {
-  id               String    @id @default(cuid())
-  userId           String    @unique
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  ageRange         AgeRange?
-  genderIdentity   String?
-  region           String?   // ISO 3166-1 alpha-2 country + subdivision
-  incomeBracket    IncomeBracket?
-  lifestyleTags    String[]  // ["outdoor", "tech-early-adopter", "budget-conscious", ...]
-  householdSize    Int?
-  hasChildren      Boolean?
-  educationLevel   EducationLevel?
+  ageRange       AgeRange?
+  genderIdentity String?
+  region         String? // ISO 3166-1 alpha-2 country + subdivision
+  incomeBracket  IncomeBracket?
+  lifestyleTags  String[] // ["outdoor", "tech-early-adopter", "budget-conscious", ...]
+  householdSize  Int?
+  hasChildren    Boolean?
+  educationLevel EducationLevel?
 
-  updatedAt        DateTime  @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@map("user_demographics")
 }
@@ -59,36 +65,36 @@ model UserDemographics {
 // ─────────────────────────────────────────
 
 model Product {
-  id             String    @id @default(cuid())
-  name           String
-  brand          String?
-  category       String    // "electronics", "kitchen", "travel", etc.
-  subcategory    String?
-  description    String?
-  imageUrl       String?
-  websiteUrl     String?
-  priceTier      PriceTier?
-  attributes     Json      @default("{}")  // flexible KV for category-specific attrs
+  id          String     @id @default(cuid())
+  name        String
+  brand       String?
+  category    String // "electronics", "kitchen", "travel", etc.
+  subcategory String?
+  description String?
+  imageUrl    String?
+  websiteUrl  String?
+  priceTier   PriceTier?
+  attributes  Json       @default("{}") // flexible KV for category-specific attrs
 
   // External IDs for aggregation
-  amazonAsin     String?   @unique
-  googlePlaceId  String?   @unique
-  yelpId         String?   @unique
-  steamAppId     String?   @unique
-  goodreadsId    String?   @unique
+  amazonAsin    String? @unique
+  googlePlaceId String? @unique
+  yelpId        String? @unique
+  steamAppId    String? @unique
+  goodreadsId   String? @unique
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  createdBy      String?   // user id who added it
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String? // user id who added it
 
-  reviewThreads  ReviewThread[]
+  reviewThreads     ReviewThread[]
   aggregatedReviews AggregatedReview[]
 
   // Computed fields updated by background jobs
-  avgRatingInitial    Float?
-  avgRatingLongterm   Float?
-  driftScoreAvg       Float?  // negative = products that disappoint over time
-  totalReviewCount    Int     @default(0)
+  avgRatingInitial  Float?
+  avgRatingLongterm Float?
+  driftScoreAvg     Float? // negative = products that disappoint over time
+  totalReviewCount  Int    @default(0)
 
   @@index([category])
   @@index([brand])
@@ -100,22 +106,24 @@ model Product {
 // ─────────────────────────────────────────
 
 model ReviewThread {
-  id            String    @id @default(cuid())
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  productId     String
-  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  startedAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  // Optional, user-supplied. Nudge due dates are anchored on purchasedAt ?? startedAt (ADR D3).
+  purchasedAt DateTime?
 
   // Computed drift: (latestRating - initialRating), null if only 1 review
-  driftScore    Float?
+  driftScore      Float?
   // Stages completed so far
   stagesCompleted ReviewStage[]
 
-  reviews       Review[]
-  nudges        Nudge[]
+  reviews Review[]
+  nudges  Nudge[]
 
   @@unique([userId, productId])
   @@map("review_threads")
@@ -126,37 +134,37 @@ model ReviewThread {
 // ─────────────────────────────────────────
 
 model Review {
-  id              String        @id @default(cuid())
-  threadId        String
-  thread          ReviewThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  id       String       @id @default(cuid())
+  threadId String
+  thread   ReviewThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
-  stage           ReviewStage
-  capturedAt      DateTime      @default(now())
-  source          ReviewSource  @default(NATIVE)
+  stage      ReviewStage
+  capturedAt DateTime     @default(now())
+  source     ReviewSource @default(NATIVE)
 
   // Scores (1-10 scale for granularity)
-  scoreOverall    Int           // required
-  scoreValue      Int?
-  scoreQuality    Int?
-  scoreLongevity  Int?          // "has it held up?"
-  scoreExpectations Int?        // "met expectations?"
+  scoreOverall      Int // required
+  scoreValue        Int?
+  scoreQuality      Int?
+  scoreLongevity    Int? // "has it held up?"
+  scoreExpectations Int? // "met expectations?"
 
-  bodyText        String?
-  pros            String[]
-  cons            String[]
+  bodyText String?
+  pros     String[]
+  cons     String[]
 
-  wouldStillBuy   Boolean?
-  wouldRecommend  Boolean?
+  wouldStillBuy  Boolean?
+  wouldRecommend Boolean?
 
   // NLP-computed fields (populated by ML service)
-  sentimentScore  Float?        // -1.0 to 1.0
-  keyTopics       String[]
-  summaryAuto     String?       // auto-generated summary
+  sentimentScore Float? // -1.0 to 1.0
+  keyTopics      String[]
+  summaryAuto    String? // auto-generated summary
 
   // For imported reviews
-  externalId      String?
-  externalUrl     String?
-  externalAuthor  String?
+  externalId     String?
+  externalUrl    String?
+  externalAuthor String?
 
   @@unique([threadId, stage])
   @@index([threadId])
@@ -169,25 +177,25 @@ model Review {
 // ─────────────────────────────────────────
 
 model AggregatedReview {
-  id            String    @id @default(cuid())
-  productId     String
-  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  source        AggregationSource
-  externalId    String
-  authorName    String?
-  rating        Float     // normalized to 1-10
-  bodyText      String?
-  reviewDate    DateTime?
-  verifiedPurchase Boolean @default(false)
+  source           AggregationSource
+  externalId       String
+  authorName       String?
+  rating           Float // normalized to 1-10
+  bodyText         String?
+  reviewDate       DateTime?
+  verifiedPurchase Boolean           @default(false)
 
   // NLP enrichment
-  sentimentScore  Float?
-  keyTopics       String[]
-  pros            String[]
-  cons            String[]
+  sentimentScore Float?
+  keyTopics      String[]
+  pros           String[]
+  cons           String[]
 
-  importedAt    DateTime  @default(now())
+  importedAt DateTime @default(now())
 
   @@unique([source, externalId])
   @@map("aggregated_reviews")
@@ -198,22 +206,38 @@ model AggregatedReview {
 // ─────────────────────────────────────────
 
 model Nudge {
-  id            String      @id @default(cuid())
-  userId        String
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  threadId      String
-  thread        ReviewThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  id       String       @id @default(cuid())
+  userId   String
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threadId String
+  thread   ReviewThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
-  targetStage   ReviewStage
-  scheduledFor  DateTime
-  sentAt        DateTime?
-  completedAt   DateTime?
-  status        NudgeStatus @default(PENDING)
+  targetStage  ReviewStage
+  scheduledFor DateTime // due date, anchored on the thread's purchase/start date
+  sendAt       DateTime // when to email: due date rounded to the user's send hour, snooze, retry backoff, cap deferral
+  sentAt       DateTime?
+  completedAt  DateTime?
+  status       NudgeStatus     @default(PENDING)
+  channel      NudgeChannel? // how the user was notified once due: EMAIL or IN_APP only
+  endedReason  NudgeEndReason?
+
+  // Delivery bookkeeping (ADR D2, D7)
+  attempts          Int       @default(0) // provider calls made
+  lastAttemptAt     DateTime?
+  lastError         String?
+  claimedAt         DateTime? // set when a worker wins the send-claim
+  providerMessageId String?
+
+  snoozedUntil DateTime?
+  snoozeCount  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // One nudge per thread and stage; state changes update this row.
   @@unique([threadId, targetStage])
   @@index([userId, status])
-  @@index([scheduledFor, status])
+  @@index([status, sendAt])
   @@map("nudges")
 }
 
@@ -222,12 +246,12 @@ model Nudge {
 // ─────────────────────────────────────────
 
 model RefreshToken {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token       String   @unique
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 
   @@map("refresh_tokens")
 }
@@ -297,9 +321,22 @@ enum EducationLevel {
 }
 
 enum NudgeStatus {
-  PENDING
-  SENT
-  COMPLETED
-  SKIPPED
-  CANCELLED
+  PENDING // scheduled; waiting for sendAt
+  SENDING // a worker holds the send-claim
+  SENT // user notified (by email or in-app only, see channel)
+  COMPLETED // review for this stage submitted
+  SKIPPED // user skipped this stage
+  CANCELLED // superseded by a later stage
+  FAILED // email dead-lettered after retries or a permanent provider error; still shown in-app
+}
+
+enum NudgeChannel {
+  EMAIL
+  IN_APP
+}
+
+enum NudgeEndReason {
+  REVIEW_SUBMITTED
+  SUPERSEDED
+  USER_SKIPPED
 }

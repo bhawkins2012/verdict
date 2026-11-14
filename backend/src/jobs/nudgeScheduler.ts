@@ -44,6 +44,7 @@ export async function scheduleNudges(
       threadId,
       targetStage: next.stage,
       scheduledFor,
+      sendAt: scheduledFor,
       status: 'PENDING',
     }
   })
