@@ -213,4 +213,23 @@ describe('syncThreadNudges', () => {
     await prisma.nudge.update({ where: { id }, data: { status: 'SENDING', claimedAt: new Date() } })
     await expect(prisma.$transaction((tx) => skipNudge(tx, id, user.id, new Date()))).rejects.toMatchObject({ status: 409 })
   })
+
+  it('re-timing (time zone or send hour changed) never pulls a snooze or a retry earlier', async () => {
+    const user = await makeUser()
+    const now = new Date('2026-01-20T00:00:00Z')
+    const snoozedThread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const [snoozedId] = await prisma.$transaction((tx) => syncThreadNudges(tx, snoozedThread.id, now))
+    await prisma.$transaction((tx) => snoozeNudge(tx, snoozedId, user.id, 30, now))
+    const retryThread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const [retryId] = await prisma.$transaction((tx) => syncThreadNudges(tx, retryThread.id, now))
+    const retryAt = new Date('2026-01-25T12:00:00Z')
+    await prisma.nudge.update({ where: { id: retryId }, data: { attempts: 2, sendAt: retryAt } })
+
+    await prisma.user.update({ where: { id: user.id }, data: { timezone: 'Asia/Kolkata', nudgeSendHour: 7 } })
+    for (const t of [snoozedThread.id, retryThread.id]) await prisma.$transaction((tx) => syncThreadNudges(tx, t, now, { retime: true }))
+
+    const snoozed = await prisma.nudge.findUniqueOrThrow({ where: { id: snoozedId } })
+    expect(snoozed.sendAt.getTime()).toBeGreaterThanOrEqual(snoozed.snoozedUntil!.getTime())
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id: retryId } })).sendAt.getTime()).toBeGreaterThanOrEqual(retryAt.getTime())
+  })
 })
