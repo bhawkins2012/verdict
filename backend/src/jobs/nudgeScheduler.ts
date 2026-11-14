@@ -2,6 +2,7 @@ import { Queue } from 'bullmq'
 import { ReviewStage } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
+import { redisConnectionFromUrl } from '../nudges/queue'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
 
@@ -9,9 +10,8 @@ let nudgeQueue: Queue | null = null
 
 function getNudgeQueue(): Queue {
   if (!nudgeQueue) {
-    const url = new URL(REDIS_URL)
     nudgeQueue = new Queue('nudges', {
-      connection: { host: url.hostname, port: parseInt(url.port || '6379') }
+      connection: redisConnectionFromUrl(REDIS_URL)
     })
   }
   return nudgeQueue

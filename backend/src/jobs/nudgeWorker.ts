@@ -1,12 +1,11 @@
 import { Worker, Job } from 'bullmq'
 import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
+import { redisConnectionFromUrl } from '../nudges/queue'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
 
 export function startNudgeWorker() {
-  const url = new URL(REDIS_URL)
-
   const worker = new Worker('nudges', async (job: Job) => {
     const { nudgeId, userId, stage } = job.data
     logger.info('Processing nudge', { nudgeId, stage })
@@ -29,7 +28,7 @@ export function startNudgeWorker() {
     logger.info('Nudge marked as sent', { nudgeId, userId, stage })
 
   }, {
-    connection: { host: url.hostname, port: parseInt(url.port || '6379') },
+    connection: redisConnectionFromUrl(REDIS_URL),
     concurrency: 5,
   })
 
