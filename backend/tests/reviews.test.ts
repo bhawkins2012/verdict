@@ -1,8 +1,7 @@
 import { api, bearer, cleanup, createProduct, registerUser } from './helpers'
 import { prisma } from '../src/lib/prisma'
 
-// Redis-backed scheduling and fire-and-forget drift are exercised elsewhere / not under test here.
-jest.mock('../src/jobs/nudgeScheduler', () => ({ scheduleNudges: jest.fn().mockResolvedValue(undefined) }))
+// Fire-and-forget drift is exercised in drift.test.ts. Nudge enqueueing is a no-op here (no runtime started).
 jest.mock('../src/services/driftService', () => ({ computeThreadDrift: jest.fn().mockResolvedValue(null) }))
 
 const userIds: string[] = []
