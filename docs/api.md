@@ -268,10 +268,10 @@ Linked from every nudge email. Shows a confirmation page with a button; **does n
 Turns email reminders off for that user (`emailNudgesEnabled = false`, consent cleared). Used by the confirmation page and by mail clients' one-click unsubscribe (RFC 8058, body `List-Unsubscribe=One-Click`). The token is an HMAC of the user id and purpose with `UNSUBSCRIBE_SECRET`; it does not expire.
 
 ### POST /nudges/:id/send-now *(auth, development only)*
-`404` when `NODE_ENV=production`. Makes one of your nudges due now and runs the real claim-and-send path inline, ignoring the daily cap and send hour. Returns `{ outcome: { kind: "sent" | "in-app" | "completed" | "deferred" | "retry" | "failed" | "not-claimed" | "missing", ... }, nudge }`. With the default dry-run provider nothing is sent.
+Exists only when `NODE_ENV` is `development` or `test` (`404` otherwise, including staging or unset). Makes one of your nudges due now and runs the real claim-and-send path inline, ignoring the daily cap and send hour. Returns `{ outcome: { kind: "sent" | "in-app" | "completed" | "deferred" | "retry" | "failed" | "not-claimed" | "missing", ... }, nudge }`. With the default dry-run provider nothing is sent.
 
 ### GET /nudges/dev/outbox *(auth, development only)*
-`404` in production. Your messages from the dry-run provider, newest first (subject, text, html, headers).
+Development/test only (`404` otherwise). Your messages from the dry-run provider, newest first (subject, text, html, headers).
 
 ---
 

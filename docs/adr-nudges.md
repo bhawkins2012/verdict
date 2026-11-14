@@ -213,7 +213,7 @@ It will be verified on an empty database, on a seeded database, and on a databas
 | `NUDGES_ENABLED` | `true` (`false` in tests) | kill switch for the worker and reconciler |
 | `FRONTEND_URL` | existing | base for the deep link and unsubscribe URL |
 
-**Manual trigger in dev:** `POST /api/nudges/:id/send-now`. It is authenticated, limited to your own nudge, and not mounted when `NODE_ENV=production`. It makes the nudge due now and runs the same claim-and-send path inline, ignoring the daily cap and send hour (documented). `GET /api/nudges/dev/outbox` shows what the console provider "sent".
+**Manual trigger in dev:** `POST /api/nudges/:id/send-now`. It is authenticated, limited to your own nudge, and only available when `NODE_ENV` is `development` or `test` (an allow-list, so staging or an unset value fail closed). It makes the nudge due now and runs the same claim-and-send path inline, ignoring the daily cap and send hour (documented). `GET /api/nudges/dev/outbox` shows what the console provider "sent".
 
 ## 3. How the requested tests map (Step 3)
 

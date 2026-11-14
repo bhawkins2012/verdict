@@ -211,11 +211,13 @@ describe('development tools', () => {
     expect(outbox.body[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
   })
 
-  it('dev routes do not exist in production', async () => {
+  it.each(['production', 'staging', 'prod', ''])('dev routes do not exist unless NODE_ENV is development or test (NODE_ENV=%j)', async (env) => {
     const u = await apiUser()
     const n = await nudgeFor(u.id, 1)
-    process.env.NODE_ENV = 'production'
+    if (env === '') delete process.env.NODE_ENV
+    else process.env.NODE_ENV = env
     expect((await api().post(`/api/nudges/${n.id}/send-now`).set(bearer(u.accessToken))).status).toBe(404)
     expect((await api().get('/api/nudges/dev/outbox').set(bearer(u.accessToken))).status).toBe(404)
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id: n.id } })).status).toBe('PENDING')
   })
 })

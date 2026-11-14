@@ -98,8 +98,10 @@ nudgesRouter.post('/unsubscribe', express.urlencoded({ extended: false }), async
 })
 
 // ── Development only ──────────────────────────────────────────────────────────────────────────────
+// Allow-list, so staging, an unset NODE_ENV or a typo fail closed (these routes can re-send email and
+// ignore the daily cap).
 function devOnly(_req: Request, _res: Response, next: NextFunction) {
-  if (process.env.NODE_ENV === 'production') throw new AppError(404, 'Not found')
+  if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') throw new AppError(404, 'Not found')
   next()
 }
 
