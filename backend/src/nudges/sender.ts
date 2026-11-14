@@ -12,6 +12,9 @@ import { renderNudgeEmail } from './email'
 import { EmailProvider, EmailProviderError } from './providers'
 import { localDayBounds, nextLocalSendTime } from './time'
 
+/** A claim older than this belongs to a dead worker; the reconciler returns it to PENDING. */
+export const STALE_CLAIM_MS = 10 * 60 * 1000
+
 /** Retry delays after the 1st, 2nd, 3rd, 4th failed attempt (ADR Q7). */
 export const RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000]
 
@@ -89,12 +92,16 @@ export async function processNudge(nudgeId: string, deps: SenderDeps, opts: { ig
     if (!opts.ignoreCapAndHour) {
       const { start, end } = localDayBounds(now, nudge.user.timezone)
       // Emails already sent today plus other nudges currently being sent (all of which are emails:
-      // in-app/deferred/completed outcomes are resolved inside this transaction).
+      // in-app/deferred/completed outcomes are resolved inside this transaction). A stale claim from a
+      // dead worker is not counted, or it would block the user's other emails until it is recovered.
       const used = await tx.nudge.count({
         where: {
           userId: nudge.userId,
           id: { not: nudgeId },
-          OR: [{ channel: 'EMAIL', sentAt: { gte: start, lt: end } }, { status: 'SENDING' }],
+          OR: [
+            { channel: 'EMAIL', sentAt: { gte: start, lt: end } },
+            { status: 'SENDING', claimedAt: { gte: new Date(now.getTime() - STALE_CLAIM_MS) } },
+          ],
         },
       })
       if (used >= deps.config.dailyCap) {

@@ -128,6 +128,15 @@ describe('processNudge: daily cap', () => {
     expect(outcomes.sort()).toEqual(['deferred', 'sent'])
   })
 
+  it("a dead worker's stale claim does not count toward the cap", async () => {
+    const user = await makeUser()
+    const stale = await dueNudge(user, 'Kettle')
+    await prisma.nudge.update({ where: { id: stale.id }, data: { status: 'SENDING', claimedAt: new Date(NOW.getTime() - 11 * 60_000) } })
+    const next = await dueNudge(user, 'Toaster')
+    const { provider } = mockProvider()
+    expect((await processNudge(next.id, senderDeps(provider, NOW))).kind).toBe('sent')
+  })
+
   it('in-app-only notifications do not count toward the email cap', async () => {
     const optedOut = await makeUser({ emailNudgesEnabled: false })
     const inApp = await dueNudge(optedOut)

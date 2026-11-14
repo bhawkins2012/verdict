@@ -4,9 +4,9 @@ import { PrismaClient } from '@prisma/client'
 import { logger } from '../lib/logger'
 import { syncThreadNudges } from './lifecycle'
 import { NudgeQueue } from './queue'
-import { ProcessOutcome } from './sender'
+import { ProcessOutcome, STALE_CLAIM_MS } from './sender'
 
-export const STALE_CLAIM_MS = 10 * 60 * 1000
+export { STALE_CLAIM_MS }
 export const ENQUEUE_HORIZON_MS = 24 * 60 * 60 * 1000
 export const INLINE_BATCH = 50
 const SWEEP_PAGE = 200
