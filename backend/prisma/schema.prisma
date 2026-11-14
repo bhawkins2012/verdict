@@ -210,6 +210,8 @@ model Nudge {
   completedAt   DateTime?
   status        NudgeStatus @default(PENDING)
 
+  // One nudge per thread and stage; state changes update this row.
+  @@unique([threadId, targetStage])
   @@index([userId, status])
   @@index([scheduledFor, status])
   @@map("nudges")
