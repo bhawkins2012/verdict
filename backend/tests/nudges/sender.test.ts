@@ -180,6 +180,38 @@ describe('processNudge: failures', () => {
     expect(await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).toMatchObject({ status: 'FAILED', attempts: 1 })
   })
 
+  it('a database error after the provider accepted the email is not treated as a failed send', async () => {
+    const user = await makeUser()
+    const nudge = await dueNudge(user)
+    const { provider, send } = mockProvider()
+    // The provider accepts; then recording SENT fails (e.g. a brief database outage).
+    const spy = jest.spyOn(prisma.nudge, 'updateMany').mockRejectedValueOnce(new Error('connection terminated'))
+    try {
+      const outcome = await processNudge(nudge.id, senderDeps(provider, NOW))
+      expect(outcome.kind).toBe('sent')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(send).toHaveBeenCalledTimes(1)
+    // Left SENDING for the reconciler (at-least-once), not counted as a failed attempt or retried in 1 min.
+    expect(await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).toMatchObject({ status: 'SENDING', attempts: 0, lastError: null })
+  })
+
+  it('a review submitted while the email is in flight: the nudge stays COMPLETED and the send is still recorded', async () => {
+    const user = await makeUser()
+    const nudge = await dueNudge(user)
+    const { provider } = mockProvider({
+      send: async () => {
+        await prisma.nudge.update({ where: { id: nudge.id }, data: { status: 'COMPLETED', endedReason: 'REVIEW_SUBMITTED' } })
+        return { providerMessageId: 'mid-flight' }
+      },
+    })
+    expect((await processNudge(nudge.id, senderDeps(provider, NOW))).kind).toBe('sent')
+    expect(await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).toMatchObject({
+      status: 'COMPLETED', channel: 'EMAIL', providerMessageId: 'mid-flight', sentAt: expect.any(Date),
+    })
+  })
+
   it('deferrals and in-app outcomes are not counted as attempts', async () => {
     const user = await makeUser({ emailNudgesEnabled: false })
     const nudge = await dueNudge(user)

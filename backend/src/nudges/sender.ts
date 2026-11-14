@@ -125,8 +125,17 @@ export async function processNudge(nudgeId: string, deps: SenderDeps, opts: { ig
   )
 
   const attempts = nudge.attempts + 1
+  let providerMessageId: string
   try {
-    const { providerMessageId } = await deps.provider.send(message)
+    ;({ providerMessageId } = await deps.provider.send(message))
+  } catch (err) {
+    return recordFailure(deps, nudge.id, attempts, err, clock())
+  }
+
+  // The email is out. Recording it is separate from the send: if this fails (e.g. the database is
+  // briefly unavailable) the nudge stays SENDING and the reconciler recovers it later, which re-sends
+  // (at-least-once). It is not a failed send and must not count as an attempt or retry in a minute.
+  try {
     const at = clock()
     const sentFields = { sentAt: at, channel: 'EMAIL' as const, providerMessageId, attempts, lastAttemptAt: at, lastError: null }
     const marked = await deps.db.nudge.updateMany({
@@ -137,27 +146,32 @@ export async function processNudge(nudgeId: string, deps: SenderDeps, opts: { ig
       // Completed/cancelled while we were sending. Keep the delivery record (it counts toward the cap).
       await deps.db.nudge.update({ where: { id: nudge.id }, data: sentFields })
     }
-    logger.info('Nudge email sent', { nudgeId: nudge.id, provider: deps.provider.name, providerMessageId })
-    return { kind: 'sent', providerMessageId }
   } catch (err) {
-    const at = clock()
-    const error = err instanceof Error ? err.message.slice(0, 500) : String(err)
-    // Unknown errors are treated as transient; EmailProviderError says explicitly.
-    const retryable = err instanceof EmailProviderError ? err.retryable : true
-    if (retryable && attempts < deps.config.maxAttempts) {
-      const sendAt = new Date(at.getTime() + RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)])
-      await deps.db.nudge.updateMany({
-        where: { id: nudge.id, status: 'SENDING' },
-        data: { status: 'PENDING', sendAt, attempts, lastAttemptAt: at, lastError: error, claimedAt: null },
-      })
-      logger.warn('Nudge email failed; will retry', { nudgeId: nudge.id, attempts, sendAt, error })
-      return { kind: 'retry', sendAt, error }
-    }
-    await deps.db.nudge.updateMany({
-      where: { id: nudge.id, status: 'SENDING' },
-      data: { status: 'FAILED', attempts, lastAttemptAt: at, lastError: error, claimedAt: null },
+    logger.error('Nudge email sent but not recorded; the reconciler will recover the claim', {
+      nudgeId: nudge.id, providerMessageId, error: err instanceof Error ? err.message : String(err),
     })
-    logger.error('Nudge email dead-lettered', { nudgeId: nudge.id, attempts, retryable, error })
-    return { kind: 'failed', error }
   }
+  logger.info('Nudge email sent', { nudgeId: nudge.id, provider: deps.provider.name, providerMessageId })
+  return { kind: 'sent', providerMessageId }
+}
+
+async function recordFailure(deps: SenderDeps, nudgeId: string, attempts: number, err: unknown, at: Date): Promise<ProcessOutcome> {
+  const error = err instanceof Error ? err.message.slice(0, 500) : String(err)
+  // Unknown errors are treated as transient; EmailProviderError says explicitly.
+  const retryable = err instanceof EmailProviderError ? err.retryable : true
+  if (retryable && attempts < deps.config.maxAttempts) {
+    const sendAt = new Date(at.getTime() + RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)])
+    await deps.db.nudge.updateMany({
+      where: { id: nudgeId, status: 'SENDING' },
+      data: { status: 'PENDING', sendAt, attempts, lastAttemptAt: at, lastError: error, claimedAt: null },
+    })
+    logger.warn('Nudge email failed; will retry', { nudgeId, attempts, sendAt, error })
+    return { kind: 'retry', sendAt, error }
+  }
+  await deps.db.nudge.updateMany({
+    where: { id: nudgeId, status: 'SENDING' },
+    data: { status: 'FAILED', attempts, lastAttemptAt: at, lastError: error, claimedAt: null },
+  })
+  logger.error('Nudge email dead-lettered', { nudgeId, attempts, retryable, error })
+  return { kind: 'failed', error }
 }
