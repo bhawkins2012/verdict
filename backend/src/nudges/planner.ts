@@ -74,7 +74,7 @@ export interface PlanTarget {
 
 /**
  * The single stage this thread should be nudged about, or null if there is nothing left to ask.
- * - Candidates: scheduled stages after the latest reviewed scheduled stage, not reviewed, not skipped.
+ * - Candidates: scheduled stages after the latest reviewed or skipped scheduled stage.
  * - If several are already due, only the latest due one (the most relevant) is targeted.
  * - Otherwise the earliest upcoming one.
  * - Never sooner than MIN_GAP_AFTER_REVIEW_MS after the latest review.
@@ -82,10 +82,12 @@ export interface PlanTarget {
 export function planThreadNudge(input: PlanInput): PlanTarget | null {
   const reviewed = new Set(input.reviewedStages)
   const skipped = new Set(input.skippedStages)
-  const lastReviewedIndex = SCHEDULED_STAGES.reduce((acc, s, i) => (reviewed.has(s) ? i : acc), -1)
+  // A reviewed or skipped stage closes itself and every earlier stage: skipping 1 month must not
+  // bring back a 1-week nudge it had superseded.
+  const lastClosedIndex = SCHEDULED_STAGES.reduce((acc, s, i) => (reviewed.has(s) || skipped.has(s) ? i : acc), -1)
 
   const candidates = SCHEDULED_STAGES
-    .slice(lastReviewedIndex + 1)
+    .slice(lastClosedIndex + 1)
     .filter((s) => !reviewed.has(s) && !skipped.has(s))
     .map((stage) => ({ stage, dueAt: dueDateFor(input.anchor, stage) }))
   if (candidates.length === 0) return null

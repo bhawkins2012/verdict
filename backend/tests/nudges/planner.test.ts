@@ -45,6 +45,12 @@ describe('nudge planner', () => {
     expect(plan({ reviewedStages: ['INITIAL', 'SIX_MONTHS'] })?.stage).toBe('ONE_YEAR')
   })
 
+  it('skipping a stage also closes every earlier stage (they never come back)', () => {
+    // 1 week and 1 month are both due; the user skips 1 month. 1 week must not be resurrected.
+    const p = plan({ now: new Date('2026-02-15T00:00:00Z'), skippedStages: ['ONE_MONTH'] })
+    expect(p?.stage).toBe('THREE_MONTHS')
+  })
+
   it('CUSTOM reviews do not affect the plan, and a finished thread has nothing to ask', () => {
     expect(plan({ reviewedStages: ['INITIAL', 'CUSTOM'] })?.stage).toBe('ONE_WEEK')
     expect(plan({ reviewedStages: ['INITIAL', 'TWO_YEARS'] })).toBeNull()
