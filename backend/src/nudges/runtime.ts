@@ -83,11 +83,12 @@ export function startNudgeRuntime(redisUrl: string): void {
         { db: prisma, queue, process: (id) => processNudge(id, deps()) },
         { sweep: runs % SWEEP_EVERY_N_RUNS === 0 }
       )
-      runs++
       logger.info('Nudge reconciler run', { ...report })
     } catch (err) {
       logger.error('Nudge reconciler run failed', { error: err instanceof Error ? err.message : String(err) })
     } finally {
+      // Advance even after a failed run, so one failure does not turn every later run into a sweep.
+      runs++
       running = false
     }
   }

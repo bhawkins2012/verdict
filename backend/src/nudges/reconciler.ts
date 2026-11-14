@@ -9,6 +9,8 @@ import { ProcessOutcome, STALE_CLAIM_MS } from './sender'
 export { STALE_CLAIM_MS }
 export const ENQUEUE_HORIZON_MS = 24 * 60 * 60 * 1000
 export const INLINE_BATCH = 50
+/** Pending nudges considered per run (soonest first); the rest are picked up by the next run. */
+export const PENDING_SCAN_LIMIT = 500
 const SWEEP_PAGE = 200
 
 export interface ReconcileDeps {
@@ -68,6 +70,7 @@ export async function reconcileOnce(deps: ReconcileDeps, opts: { sweep?: boolean
     where: { status: 'PENDING', sendAt: { lte: new Date(now.getTime() + ENQUEUE_HORIZON_MS) } },
     select: { id: true, sendAt: true },
     orderBy: { sendAt: 'asc' },
+    take: PENDING_SCAN_LIMIT,
   })
   if (!deps.queue) {
     report.redisDown = true
