@@ -1,5 +1,5 @@
 import { prisma } from '../../src/lib/prisma'
-import { snoozeNudge, syncThreadNudges } from '../../src/nudges/lifecycle'
+import { MAX_SNOOZES, skipNudge, snoozeNudge, syncThreadNudges } from '../../src/nudges/lifecycle'
 import { api, bearer, cleanup, registerUser } from '../helpers'
 import { cleanupNudgeFixtures, days, makeProduct, makeThread, makeUser, raceOnNudges } from './fixtures'
 
@@ -190,5 +190,27 @@ describe('syncThreadNudges', () => {
     const after = await prisma.nudge.findUniqueOrThrow({ where: { id } })
     expect(after.sendAt.getTime()).toBe(snoozed.sendAt.getTime())
     expect(after.sendAt.getTime()).toBeGreaterThanOrEqual(snoozed.snoozedUntil!.getTime())
+  })
+
+  it('concurrent snoozes cannot exceed the limit (the check and the update are one statement)', async () => {
+    const user = await makeUser()
+    const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const now = new Date('2026-01-20T00:00:00Z')
+    const [id] = await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, now))
+    await prisma.nudge.update({ where: { id }, data: { snoozeCount: MAX_SNOOZES - 1 } })
+
+    const settled = await raceOnNudges([1, 2].map(() => () => prisma.$transaction((tx) => snoozeNudge(tx, id, user.id, 7, now))))
+
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect(settled.filter((r) => r.status === 'rejected')).toHaveLength(1)
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id } })).snoozeCount).toBe(MAX_SNOOZES)
+  })
+
+  it('a nudge being sent (SENDING) cannot be skipped', async () => {
+    const user = await makeUser()
+    const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const [id] = await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, new Date('2026-01-20T00:00:00Z')))
+    await prisma.nudge.update({ where: { id }, data: { status: 'SENDING', claimedAt: new Date() } })
+    await expect(prisma.$transaction((tx) => skipNudge(tx, id, user.id, new Date()))).rejects.toMatchObject({ status: 409 })
   })
 })

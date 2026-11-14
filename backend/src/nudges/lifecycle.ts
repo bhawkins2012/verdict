@@ -156,28 +156,33 @@ async function ownedNudge(db: Db, nudgeId: string, userId: string) {
 /** Skip: never nudge for this stage; move on to the next one. */
 export async function skipNudge(db: Db, nudgeId: string, userId: string, now: Date): Promise<string[]> {
   const nudge = await ownedNudge(db, nudgeId, userId)
-  if (!['PENDING', 'SENT', 'FAILED'].includes(nudge.status)) {
-    throw new NudgeActionError(409, `A ${nudge.status.toLowerCase()} nudge cannot be skipped`)
-  }
-  await db.nudge.update({
-    where: { id: nudgeId },
+  // Check and update in one statement, so a concurrent claim (SENDING) or skip cannot slip in between.
+  const skipped = await db.nudge.updateMany({
+    where: { id: nudgeId, status: { in: ['PENDING', 'SENT', 'FAILED'] } },
     data: { status: 'SKIPPED', endedReason: 'USER_SKIPPED', claimedAt: null },
   })
+  if (skipped.count === 0) {
+    const current = await db.nudge.findUniqueOrThrow({ where: { id: nudgeId }, select: { status: true } })
+    throw new NudgeActionError(409, `A ${current.status.toLowerCase()} nudge cannot be skipped`)
+  }
   return syncThreadNudges(db, nudge.threadId, now)
 }
 
 /** Snooze: hide it for `days` and email again after that (at most MAX_SNOOZES times). */
 export async function snoozeNudge(db: Db, nudgeId: string, userId: string, days: number, now: Date): Promise<string[]> {
   const nudge = await ownedNudge(db, nudgeId, userId)
-  if (!['PENDING', 'SENT'].includes(nudge.status)) {
-    throw new NudgeActionError(409, `A ${nudge.status.toLowerCase()} nudge cannot be snoozed`)
-  }
-  if (nudge.snoozeCount >= MAX_SNOOZES) throw new NudgeActionError(409, `A nudge can be snoozed at most ${MAX_SNOOZES} times`)
   const snoozedUntil = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
   const sendAt = nextLocalSendTime(snoozedUntil, nudge.user.timezone, nudge.user.nudgeSendHour)
-  await db.nudge.update({
-    where: { id: nudgeId },
+  // Check and update in one statement, so concurrent snoozes cannot exceed the limit and a claim
+  // (SENDING) cannot slip in between.
+  const snoozed = await db.nudge.updateMany({
+    where: { id: nudgeId, status: { in: ['PENDING', 'SENT'] }, snoozeCount: { lt: MAX_SNOOZES } },
     data: { status: 'PENDING', snoozedUntil, sendAt, snoozeCount: { increment: 1 }, claimedAt: null },
   })
+  if (snoozed.count === 0) {
+    const current = await db.nudge.findUniqueOrThrow({ where: { id: nudgeId }, select: { status: true, snoozeCount: true } })
+    if (current.snoozeCount >= MAX_SNOOZES) throw new NudgeActionError(409, `A nudge can be snoozed at most ${MAX_SNOOZES} times`)
+    throw new NudgeActionError(409, `A ${current.status.toLowerCase()} nudge cannot be snoozed`)
+  }
   return [nudgeId]
 }
