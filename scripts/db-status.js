@@ -13,9 +13,16 @@ const { PrismaClient } = require(clientPath)
 const prisma = new PrismaClient({ log: [] })
 
 ;(async () => {
-  const [{ history, usersTable }] = await prisma.$queryRaw`
+  const [{ history, usersTable, nudgesTable }] = await prisma.$queryRaw`
     SELECT to_regclass('_prisma_migrations') IS NOT NULL AS history,
-           to_regclass('users') IS NOT NULL AS "usersTable"`
+           to_regclass('users') IS NOT NULL AS "usersTable",
+           to_regclass('nudges') IS NOT NULL AS "nudgesTable"`
+  // Dead-lettered nudge emails. status::text works before the FAILED enum value exists.
+  let failedNudges = 0
+  if (nudgesTable) {
+    const [{ n }] = await prisma.$queryRaw`SELECT count(*)::int AS n FROM nudges WHERE status::text = 'FAILED'`
+    failedNudges = n
+  }
   let users = 0
   let hasDemoUser = false
   if (usersTable) {
@@ -23,7 +30,7 @@ const prisma = new PrismaClient({ log: [] })
     hasDemoUser = Boolean(await prisma.user.findUnique({ where: { email: 'alice@example.com' }, select: { id: true } }))
   }
   // migrationHistory=false with usersTable=true means the schema was created with `prisma db push`.
-  console.log(JSON.stringify({ migrationHistory: history, usersTable, users, hasDemoUser }))
+  console.log(JSON.stringify({ migrationHistory: history, usersTable, users, hasDemoUser, failedNudges }))
 })()
   .catch((err) => {
     const lines = String(err.message || err).split('\n').map((l) => l.trim()).filter(Boolean)

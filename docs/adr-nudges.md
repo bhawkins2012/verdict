@@ -62,7 +62,7 @@ UPDATE nudges
 
 Postgres re-evaluates the `WHERE` under the row lock, so of two concurrent claimers exactly one gets rowcount 1 (implemented with Prisma `updateMany`, checking `count`). After the provider call, the owner sets `SENT` or schedules a retry (D7). Before calling the provider, the owner re-checks that the stage has not been reviewed meanwhile, that the user is still opted in, and the cap; if any check fails it records the outcome without sending.
 
-**Delivery guarantee: at-least-once on a crash after send.** The claim makes the *decision to send* exactly-once, but the email and the database are not one transaction. If the process dies after the provider accepted the email and before the nudge is marked `SENT`, the email is sent again once the claim is recovered. Nothing else causes a second email.
+**Delivery guarantee: at-least-once on a crash after send.** The claim makes the *decision to send* exactly-once, but the email and the database are not one transaction. If the process dies, or the database is unavailable, after the provider accepted the email and before the nudge is marked `SENT`, the row stays `SENDING` and the email is sent again once the reconciler recovers the claim (after 10 minutes). The provider's idempotency key is the only guard against that duplicate. No other path sends a second email for the same nudge, except an explicit snooze, which by design emails once more.
 
 **Crash after sending, before recording `SENT`.** The row is stuck in `SENDING`. The reconciler returns rows claimed more than 10 minutes ago to `PENDING`, so they are retried. The retry reuses the same `Idempotency-Key` (`nudge/<id>`), which Resend uses to drop duplicates for 24 hours. The residual duplicate risk is therefore a crash *and* a recovery more than 24 h later. *Unverified until a key is available:* Resend's idempotency behavior is taken from its documentation.
 
@@ -71,7 +71,7 @@ Postgres re-evaluates the `WHERE` under the row lock, so of two concurrent claim
 **Reconciler**: runs at API start and every 5 minutes in every API instance. Every step is idempotent, so running in parallel is safe; the claim guarantees no double send.
 1. `SENDING` rows with `claimedAt` older than 10 min → `PENDING`.
 2. `PENDING` rows with `sendAt ≤ now + 24h` and no live job (`queue.getJob(jobId)` missing, or not `delayed`/`waiting`/`active`) → enqueue with `delay = max(0, sendAt − now)`.
-3. **Redis unavailable** (enqueue throws or `PING` fails): process due nudges inline in the reconciler, through the same claim, oldest first, in batches of 50. Delivery continues without Redis, at up to a 5-minute delay.
+3. **Redis unavailable** (an enqueue throws or hits its 3 s timeout; offline queueing is disabled so this fails fast): process due nudges inline in the reconciler, through the same claim, oldest first, in batches of 50. Delivery continues without Redis, at up to a 5-minute delay.
 4. Hourly: re-plan threads whose active nudge may have been superseded by time passing (D3).
 
 *Alternatives considered:* (a) DB polling only, with no BullMQ (simplest and fully Redis-independent, but drops the existing queue the plan keeps, and loses sub-minute timing); (b) trusting BullMQ persistence (fails the Redis-outage goal); (c) a `SELECT … FOR UPDATE SKIP LOCKED` batch claimer (equivalent safety, but more code than the single-row conditional update for our volume).
