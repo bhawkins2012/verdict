@@ -124,7 +124,7 @@ usersRouter.put('/me/notification-settings', authenticate, async (req: Request, 
     const enqueue: string[] = []
     if ((timezone !== undefined && timezone !== current.timezone) || (nudgeSendHour !== undefined && nudgeSendHour !== current.nudgeSendHour)) {
       const threads = await tx.reviewThread.findMany({ where: { userId }, select: { id: true } })
-      for (const t of threads) enqueue.push(...(await syncThreadNudges(tx, t.id, now)))
+      for (const t of threads) enqueue.push(...(await syncThreadNudges(tx, t.id, now, { retime: true })))
     }
     return { settings, enqueue }
   })

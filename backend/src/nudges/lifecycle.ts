@@ -28,8 +28,13 @@ export function dueNudgesWhere(userId: string, now: Date): Prisma.NudgeWhereInpu
 /**
  * Bring one thread's nudges in line with the plan. Returns ids of PENDING nudges whose delivery job
  * should be (re)scheduled.
+ *
+ * An existing PENDING nudge keeps its send time unless its due date changed, the earliest allowed time
+ * moved past it (e.g. the 7-day gap after a newer review), or `retime` is set (the user's time zone or
+ * send hour changed). Re-timing on every sync would push due nudges and retries to the next send hour,
+ * so a sweep could postpone delivery indefinitely.
  */
-export async function syncThreadNudges(db: Db, threadId: string, now: Date): Promise<string[]> {
+export async function syncThreadNudges(db: Db, threadId: string, now: Date, opts: { retime?: boolean } = {}): Promise<string[]> {
   const thread = await db.reviewThread.findUnique({
     where: { id: threadId },
     include: {
@@ -90,11 +95,15 @@ export async function syncThreadNudges(db: Db, threadId: string, now: Date): Pro
   }
 
   if (existing.status === 'PENDING') {
-    // A retry backoff or a snooze may already have pushed sendAt later; never pull it earlier.
-    const keepLater = existing.attempts > 0 || (existing.snoozedUntil !== null && existing.snoozedUntil > now)
-    const nextSendAt = keepLater && existing.sendAt > sendAt ? existing.sendAt : sendAt
-    if (existing.scheduledFor.getTime() !== plan.dueAt.getTime() || existing.sendAt.getTime() !== nextSendAt.getTime()) {
-      await db.nudge.update({ where: { id: existing.id }, data: { scheduledFor: plan.dueAt, sendAt: nextSendAt } })
+    const dueChanged = existing.scheduledFor.getTime() !== plan.dueAt.getTime()
+    const tooEarly = existing.sendAt.getTime() < plan.notBefore.getTime()
+    if (dueChanged || tooEarly || opts.retime) {
+      // A retry backoff or a snooze may already have pushed sendAt later; never pull it earlier.
+      const keepLater = existing.attempts > 0 || (existing.snoozedUntil !== null && existing.snoozedUntil > now)
+      const nextSendAt = keepLater && existing.sendAt > sendAt ? existing.sendAt : sendAt
+      if (dueChanged || existing.sendAt.getTime() !== nextSendAt.getTime()) {
+        await db.nudge.update({ where: { id: existing.id }, data: { scheduledFor: plan.dueAt, sendAt: nextSendAt } })
+      }
     }
     return [existing.id]
   }

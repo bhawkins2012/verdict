@@ -126,6 +126,32 @@ describe('reconcileOnce sweep', () => {
   })
 })
 
+describe('reconcileOnce sweep does not delay delivery (review finding 1)', () => {
+  it('a sweep keeps the send time of a nudge that is already due', async () => {
+    const user = await makeUser()
+    const nudge = await dueNudge(user)
+    await reconcileOnce({ db: prisma, queue: new FakeQueue(), process: async () => ({ kind: 'not-claimed' as const }), now: () => NOW }, { sweep: true })
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).sendAt.getTime()).toBe(nudge.sendAt.getTime())
+  })
+
+  it('a sweep keeps a retry backoff time', async () => {
+    const user = await makeUser()
+    const nudge = await dueNudge(user)
+    const retryAt = new Date(NOW.getTime() + 60_000)
+    await prisma.nudge.update({ where: { id: nudge.id }, data: { attempts: 1, sendAt: retryAt } })
+    await reconcileOnce({ db: prisma, queue: new FakeQueue(), process: async () => ({ kind: 'not-claimed' as const }), now: () => NOW }, { sweep: true })
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).sendAt.getTime()).toBe(retryAt.getTime())
+  })
+
+  it('Redis down + a sweep in the same run still sends the due nudge inline', async () => {
+    const user = await makeUser()
+    await dueNudge(user)
+    const { provider, send } = mockProvider()
+    await reconcileOnce({ db: prisma, queue: null, process: (id) => processNudge(id, senderDeps(provider, NOW)), now: () => NOW }, { sweep: true })
+    expect(send.mock.calls.filter(([m]) => m.to === user.email)).toHaveLength(1)
+  })
+})
+
 describe('reconcileOnce with Redis down', () => {
   it('sends due nudges inline, once; a second run sends nothing more', async () => {
     const user = await makeUser()
