@@ -116,11 +116,16 @@ Submit a review (creates thread if first review for this product).
   "pros": ["Great build quality", "Easy setup"],
   "cons": ["Steep learning curve"],
   "wouldStillBuy": true,
-  "wouldRecommend": true
+  "wouldRecommend": true,
+  "purchasedAt": "2026-10-01"
 }
 ```
 
 **Stages:** `INITIAL | ONE_WEEK | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | TWO_YEARS | CUSTOM`
+
+- `purchasedAt` (optional, `YYYY-MM-DD`): when the user got the product; nudge due dates are anchored on it (else on the thread's first review). Future dates are rejected with 400 (judged against the most advanced time zone, UTC+14, so nobody's "today" is refused).
+- In the same transaction as the review: the nudge for this stage becomes `COMPLETED`, earlier nudges are `CANCELLED` (superseded), and the next stage's nudge is planned.
+- `409` if this stage was already reviewed for this product.
 
 ---
 
@@ -199,6 +204,8 @@ Top-rated products by long-term score (public).
 ## Users
 
 ### GET /users/me/stats *(auth)*
+`pendingNudges` counts check-ins that are due now, with exactly the same rule as `GET /nudges`.
+
 **Response:**
 ```json
 {
@@ -229,15 +236,42 @@ Update demographic profile.
 
 ---
 
-## Nudges
+## Notification settings
 
-### GET /nudges *(auth)*
-Get pending check-in nudges for the current user.
+### GET /users/me/notification-settings *(auth)*
+```json
+{ "emailNudgesEnabled": false, "emailNudgesConsentAt": null, "timezone": "UTC", "nudgeSendHour": 9, "emailVerified": false }
+```
+
+### PUT /users/me/notification-settings *(auth)*
+Any subset of `{ "emailNudgesEnabled": boolean, "timezone": "Europe/Berlin", "nudgeSendHour": 0-23 }`. Turning email on records `emailNudgesConsentAt`; turning it off clears it. `timezone` must be an IANA name (400 otherwise). Changing the time zone or hour moves pending nudges to the new local send time. Unknown fields → 400.
 
 ---
 
+## Nudges
+
+Check-in reminders; design in `docs/adr-nudges.md`, operations in CLAUDE.md ("Nudges").
+
+### GET /nudges *(auth)*
+Check-ins that are **due now** for the current user: due date reached, not snoozed, status `PENDING`, `SENDING`, `SENT` (notified) or `FAILED` (email dead-lettered; still shown in-app). Future nudges are not listed. Each item includes `thread.product`. The nav badge, dashboard banner and `GET /users/me/stats` use the same rule.
+
 ### POST /nudges/:id/skip *(auth)*
-Dismiss a nudge.
+Never nudge for this stage again (`SKIPPED`) and plan the next stage. Allowed from `PENDING`, `SENT`, `FAILED`; `409` otherwise; `403` if not yours.
+
+### POST /nudges/:id/snooze *(auth)*
+Body `{ "days": 7 }` or `{ "days": 30 }`. Hides the check-in until then and emails again afterwards (at most one more email). At most 3 snoozes per nudge (`409` after that); `400` for other values. Returns `{ snoozedUntil, snoozeCount }`.
+
+### GET /nudges/unsubscribe?u=&lt;userId&gt;&t=&lt;token&gt; *(no auth)*
+Linked from every nudge email. Shows a confirmation page with a button; **does not unsubscribe by itself** (mail scanners prefetch links). Invalid, tampered or incomplete links → `400` page.
+
+### POST /nudges/unsubscribe?u=&lt;userId&gt;&t=&lt;token&gt; *(no auth)*
+Turns email reminders off for that user (`emailNudgesEnabled = false`, consent cleared). Used by the confirmation page and by mail clients' one-click unsubscribe (RFC 8058, body `List-Unsubscribe=One-Click`). The token is an HMAC of the user id and purpose with `UNSUBSCRIBE_SECRET`; it does not expire.
+
+### POST /nudges/:id/send-now *(auth, development only)*
+`404` when `NODE_ENV=production`. Makes one of your nudges due now and runs the real claim-and-send path inline, ignoring the daily cap and send hour. Returns `{ outcome: { kind: "sent" | "in-app" | "completed" | "deferred" | "retry" | "failed" | "not-claimed" | "missing", ... }, nudge }`. With the default dry-run provider nothing is sent.
+
+### GET /nudges/dev/outbox *(auth, development only)*
+`404` in production. Your messages from the dry-run provider, newest first (subject, text, html, headers).
 
 ---
 

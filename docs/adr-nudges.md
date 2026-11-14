@@ -1,6 +1,6 @@
 # ADR: Nudge delivery, correctness and Redis resilience
 
-**Status:** Proposed (awaiting approval; nothing implemented)
+**Status:** Accepted with changes (see §6, *Decisions recorded*); implemented on `sprint-1-nudges`.
 **Supersedes / fills:** `docs/architecture.md` ADR-005 (nudge storage, refined here) and ADR-010 (notification channel: email chosen here; push/SMS out of scope).
 
 ## 1. Context: what the code does today (`main` @ `ef1f0db`)
@@ -62,9 +62,11 @@ UPDATE nudges
 
 Postgres re-evaluates the `WHERE` under the row lock, so of two concurrent claimers exactly one gets rowcount 1 (implemented with Prisma `updateMany`, checking `count`). After the provider call, the owner sets `SENT` or schedules a retry (D7). Before calling the provider, the owner re-checks that the stage has not been reviewed meanwhile, that the user is still opted in, and the cap; if any check fails it records the outcome without sending.
 
+**Delivery guarantee: at-least-once on a crash after send.** The claim makes the *decision to send* exactly-once, but the email and the database are not one transaction. If the process dies after the provider accepted the email and before the nudge is marked `SENT`, the email is sent again once the claim is recovered. Nothing else causes a second email.
+
 **Crash after sending, before recording `SENT`.** The row is stuck in `SENDING`. The reconciler returns rows claimed more than 10 minutes ago to `PENDING`, so they are retried. The retry reuses the same `Idempotency-Key` (`nudge/<id>`), which Resend uses to drop duplicates for 24 hours. The residual duplicate risk is therefore a crash *and* a recovery more than 24 h later. *Unverified until a key is available:* Resend's idempotency behavior is taken from its documentation.
 
-**BullMQ jobs** use `jobId = nudge:<id>:<sendAt epoch ms>`, so changing `sendAt` (snooze, retry, cap deferral) creates a new job. An old job that fires early simply loses the claim (`sendAt` is in the future) and does nothing. BullMQ `attempts: 1`, because retries live in the DB, not in two places. Only nudges due within 24 h are enqueued; later ones are picked up by later reconciler runs, which keeps Redis small and avoids churn.
+**BullMQ jobs** use `jobId = nudge-<id>-<sendAt epoch ms>` (BullMQ rejects `:` in custom ids; verified in bullmq 5.78), so changing `sendAt` (snooze, retry, cap deferral) creates a new job. An old job that fires early simply loses the claim (`sendAt` is in the future) and does nothing. BullMQ `attempts: 1`, because retries live in the DB, not in two places. Only nudges due within 24 h are enqueued; later ones are picked up by later reconciler runs, which keeps Redis small and avoids churn.
 
 **Reconciler**: runs at API start and every 5 minutes in every API instance. Every step is idempotent, so running in parallel is safe; the claim guarantees no double send.
 1. `SENDING` rows with `claimedAt` older than 10 min → `PENDING`.
@@ -92,7 +94,7 @@ Postgres re-evaluates the `WHERE` under the row lock, so of two concurrent claim
 `purchasedAt` is optional and user-supplied (on the first review), because `startedAt` is "first review written", which is wrong when a user starts tracking a product they have owned for months.
 
 **Planner.** One pure function computes the single active nudge per thread from the anchor, the reviewed stages, existing nudge rows and `now`:
-- **Candidates:** scheduled stages later than the latest reviewed stage that have no review and no `SKIPPED` row.
+- **Candidates:** scheduled stages later than the latest reviewed **or skipped** stage that have no review and no `SKIPPED` row. (A skip closes the earlier stages too: skipping 1 month must not bring back a superseded 1-week nudge.)
 - **Several stages already overdue** (due ≤ now): target only the **latest** overdue stage, the most relevant one, and mark earlier active nudges `CANCELLED` with reason `SUPERSEDED`. Example: a user wrote only `INITIAL` four months ago, so `ONE_WEEK`, `ONE_MONTH` and `THREE_MONTHS` are all overdue: one nudge, for `THREE_MONTHS`.
 - **Nothing overdue:** target the earliest upcoming candidate.
 - **A late user** keeps the anchored schedule. A `ONE_MONTH` review written on day 50 still leaves `THREE_MONTHS` due on day 90, not day 110. A nudge stays relevant until the next stage becomes due, then is superseded (hourly sweep, D2 step 4).
@@ -138,7 +140,7 @@ The planner runs after a review is submitted (D4), after skip or snooze, from th
 
   The product asks at the natural moment: a "Remind me by email" toggle when someone starts tracking a product, plus the setting on the profile page.
 - **Unsubscribe without login:**
-  - The token is `base64url(HMAC-SHA256(NUDGE_SIGNING_SECRET, "unsubscribe:v1:" + userId))`, compared with `crypto.timingSafeEqual`.
+  - The token is `base64url(HMAC-SHA256(UNSUBSCRIBE_SECRET, "unsubscribe:v1:" + userId))`, compared with `crypto.timingSafeEqual`. `UNSUBSCRIBE_SECRET` is a dedicated secret, separate from the JWT secrets (startup refuses the same value).
   - It doesn't expire, because old emails must keep working; rotating the secret revokes every link.
   - Each email links to `GET /api/nudges/unsubscribe?u=<userId>&t=<token>`, a tiny page with a confirm button. A plain GET doesn't unsubscribe, because mail scanners prefetch links. The button's POST to the same URL performs it.
   - Headers: `List-Unsubscribe: <that URL>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), which Gmail and Yahoo require of bulk senders.
@@ -203,7 +205,9 @@ It will be verified on an empty database, on a seeded database, and on a databas
 | `NUDGE_EMAIL_PROVIDER` | `console` | `console` (dry-run) or `resend` |
 | `RESEND_API_KEY` | none | required for `resend`; a secret, never committed |
 | `NUDGE_FROM_EMAIL` | none | required for `resend`, e.g. `Verdict <reminders@your-domain>` |
-| `NUDGE_SIGNING_SECRET` | dev value in `.env.example` | HMAC key for unsubscribe links; required, ≥ 32 chars; production must override |
+| `UNSUBSCRIBE_SECRET` | dev fallback outside production | HMAC key for unsubscribe links; ≥ 32 chars; required in production; must differ from the JWT secrets |
+| `NUDGE_REQUIRE_VERIFIED_EMAIL` | `true` | refuse real-provider sends to users whose `emailVerified` is false (they get in-app only); dry-run is unaffected |
+| `NUDGE_POSTAL_ADDRESS` | placeholder | postal address in the email footer; required with `resend` |
 | `NUDGE_DAILY_CAP` | `1` | emails per user per local day |
 | `NUDGE_MAX_ATTEMPTS` | `5` | before `FAILED` |
 | `NUDGES_ENABLED` | `true` (`false` in tests) | kill switch for the worker and reconciler |
@@ -252,3 +256,14 @@ Push and SMS (ADR-010 remains open for them), digest emails, an admin UI for dea
 | Q12 | Minimum gap after a review | **7 days** |
 | Q13 | `GET /api/nudges` returns only due check-ins (behavior change) | **Yes**; the current "all pending, including future" list is misleading |
 | Q14 | Fix the Redis URL parsing (password/DB index ignored) while touching the queue | **Yes**, in its own commit |
+
+## 6. Decisions recorded (approval of this ADR)
+
+| # | Decision |
+|---|---|
+| Q1 | Dry-run (`console`) provider is the default until a sending domain is chosen. |
+| Q2 | Email stays opt-out in the DB (`emailNudgesEnabled = false`). In addition, after a user's first `INITIAL` review of a product, show an **unchecked** opt-in toggle, with the time zone from `Intl.DateTimeFormat().resolvedOptions().timeZone`. **Open: the requested toggle text, "Email me check-ins at 1 week, 1 month, 1 year", lists 3 stages while the approved schedule (Q11) nudges at 6; not built until resolved.** |
+| Q3 | **Changed:** `NUDGE_REQUIRE_VERIFIED_EMAIL` (default `true`) refuses real-provider sends to unverified addresses; those users get the check-in in-app only. Dry-run sends are unaffected. Because nothing verifies email yet (backlog #9), **production email stays effectively off until email verification ships.** |
+| Q4–Q7, Q11, Q12, Q14 | As recommended. |
+| Q8, Q9, Q10, Q13 | As proposed. The nav badge, dashboard banner and stats count all use the same due-only query (`dueNudgesWhere`). |
+| Extra | `UNSUBSCRIBE_SECRET` (dedicated, POST to confirm, `List-Unsubscribe` + `List-Unsubscribe-Post`); dedupe migration in its own commit; purchase date may not be in the future; claim and concurrency tests on real Postgres; Resend over `fetch` with an `AbortSignal` timeout, 429/5xx transient, other 4xx permanent, `Idempotency-Key` (unverified without a key); DST tests; footer with `NUDGE_POSTAL_ADDRESS` and legal review before real sending (backlog #4); at-least-once documented; Redis URL password fixed with a test. |

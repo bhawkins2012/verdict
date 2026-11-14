@@ -64,6 +64,8 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 - A decision per source: allowed via API / link-out only / not used. Reviewed by whoever owns legal risk.
 - No scraper or importer code is merged before this exists; the schema is adjusted if some fields cannot legally be stored.
 
+**Also in scope: legal review before real nudge emails.** Sprint 1 ships nudge emails with only the dry-run provider active. Before switching `NUDGE_EMAIL_PROVIDER` to `resend` in any environment that emails real users, get legal review of: consent wording and record-keeping (`emailNudgesConsentAt`), the unsubscribe flow, the sender identity and the postal address in the footer (`NUDGE_POSTAL_ADDRESS`, currently a placeholder), and applicable rules for the target markets (e.g. CAN-SPAM, GDPR/ePrivacy, CASL).
+
 ---
 
 ## 5. Preview deployment per PR
@@ -127,7 +129,7 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 **Acceptance criteria**
 - On registration (and on email change), send a signed, expiring verification link through the Sprint 1 email provider (dry-run in dev/tests).
 - Verifying sets `emailVerified = true`; links are single-use and expire (e.g. 24h); resend is rate-limited.
-- Decision recorded (with the product owner) on whether nudges require a verified address; enforced in the nudge sender if so.
+- Nudges already require a verified address for real sends (`NUDGE_REQUIRE_VERIFIED_EMAIL=true`, decided in Sprint 1), so **production nudge email stays effectively off until this item ships.** Once verification exists, real sends go to verified users automatically; no nudge change is needed.
 
 ---
 
