@@ -1,19 +1,28 @@
 # Backlog
 
-Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem statement, acceptance criteria and a rough size: **S** ≤ 1 day, **M** 2–4 days, **L** a week or more / needs a decision first. Facts below were checked against the code on `main` (`ef1f0db`); file references point at where to start.
+Issue-ready items. Each item has a problem statement, acceptance criteria and a rough size: **S** ≤ 1 day, **M** 2–4 days, **L** a week or more / needs a decision first. Item details below were checked against `main` at `ef1f0db` (before Sprint 1) unless they say otherwise; numbers are stable IDs, the table order is the priority.
 
-| # | Item | Size |
-|---|---|---|
-| 1 | [Jest `forceExit`: find and fix leaked handles](#1-jest-forceexit-find-and-fix-leaked-handles) | S |
-| 2 | [Lint and typecheck the ML service](#2-lint-and-typecheck-the-ml-service) | S |
-| 3 | [Recommender evaluation: data and metrics strategy](#3-recommender-evaluation-data-and-metrics-strategy) | L |
-| 4 | [Aggregation sources: legal and terms-of-service review](#4-aggregation-sources-legal-and-terms-of-service-review) | M |
-| 5 | [Preview deployment per PR](#5-preview-deployment-per-pr) | M (blocked on a decision) |
-| 6 | [Product page and review-thread UI polish](#6-product-page-and-review-thread-ui-polish) | M |
-| 7 | [Product creation flow and better search](#7-product-creation-flow-and-better-search) | M |
-| 8 | [Account settings page](#8-account-settings-page) | M |
-| 9 | [Email verification](#9-email-verification) | M |
-| 10 | [Validate list query parameters](#10-validate-list-query-parameters) | S |
+## Status (updated after Sprint 1, `main` at `dceeb12`)
+
+**Done in Sprint 1 (PR #5):** email check-in nudges (delivery, Redis resilience, new 2 weeks / 3 months / 1 year / 2 years cadence, opt-in prompt with persisted decline). Part of #8 shipped with it: the profile now has the email-reminder controls (opt-in, time zone, send hour). The "real nudge email needs legal review" part of #4 is still open.
+
+**In progress:** #9 Email verification (Sprint 2, branch `sprint-2-email-verification`).
+
+## Priority order
+
+| Rank | # | Item | Size | Why this rank |
+|---|---|---|---|---|
+| — | 9 | [Email verification](#9-email-verification) | M | Sprint 2; unblocks real nudge email |
+| 1 | 4 | [Legal review: aggregation sources and real nudge email](#4-aggregation-sources-legal-and-terms-of-service-review) | M | After #9 it is the last blocker before any real email; non-engineering lead time |
+| 2 | 10 | [Validate list query parameters](#10-validate-list-query-parameters) | S | A verified 500 on `main`; small |
+| 3 | 11 | [Admin view of dead-lettered nudges](#11-admin-view-of-dead-lettered-nudges) | S | Needed before real sends: `FAILED` nudges are only visible in logs and `doctor.sh` |
+| 4 | 1 | [Jest `forceExit`: find and fix leaked handles](#1-jest-forceexit-find-and-fix-leaked-handles) | S | Test-suite hygiene; hides real leaks |
+| 5 | 2 | [Lint and typecheck the ML service](#2-lint-and-typecheck-the-ml-service) | S | Cheap; two past ML bugs would have been caught |
+| 6 | 8 | [Account settings page](#8-account-settings-page) | M | Email change from #9 lands here; password change and account deletion still missing |
+| 7 | 7 | [Product creation flow and better search](#7-product-creation-flow-and-better-search) | M | "Add product" button does nothing |
+| 8 | 6 | [Product page and review-thread UI polish](#6-product-page-and-review-thread-ui-polish) | M | |
+| 9 | 5 | [Preview deployment per PR](#5-preview-deployment-per-pr) | M | Blocked on a host decision |
+| 10 | 3 | [Recommender evaluation: data and metrics strategy](#3-recommender-evaluation-data-and-metrics-strategy) | L | Design first; low urgency at current data volume |
 
 ---
 
@@ -110,7 +119,7 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 ---
 
 ## 8. Account settings page
-**Size:** M (depends on Sprint 1)
+**Size:** M (partly done: Sprint 1 put the email-reminder controls on the profile page)
 
 **Problem.** There is no settings page: the profile page edits demographics only. Sprint 1 adds the nudge controls (email opt-in, timezone, preferred send hour; see `docs/adr-nudges.md`) and may expose them minimally; there is still no way to change display name, email or password, or delete the account.
 
@@ -122,7 +131,7 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 ---
 
 ## 9. Email verification
-**Size:** M
+**Size:** M · **In progress (Sprint 2)**
 
 **Problem.** `User.emailVerified` exists but nothing ever sets it: there is no verification flow, so every user is unverified. Once nudges send real email (Sprint 1), sending to unverified addresses risks mail to typo'd or someone else's addresses, spam complaints and damage to the sending domain's reputation.
 
@@ -144,7 +153,20 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 
 ---
 
+## 11. Admin view of dead-lettered nudges
+**Size:** S (added after Sprint 1)
+
+**Problem.** A nudge that fails `NUDGE_MAX_ATTEMPTS` times ends `FAILED` (dead letter). Today the only signs are a log line and the count in `scripts/doctor.sh`; nobody is alerted and there is no way to inspect or retry one. Once real email is on, provider outages or bad addresses would go unnoticed.
+
+**Acceptance criteria**
+- An admin-only endpoint (and minimal page or CLI) listing `FAILED` nudges with `lastError`, attempts and user, newest first; a retry action that returns one to `PENDING` with attempts reset.
+- Admin authorization defined first (there is no admin role yet): a decision recorded in an ADR.
+- Tests for authorization and retry.
+
+---
+
 ## Also noted (smaller, not yet itemized)
+- Sprint 1 leftovers: the dashboard progress bar shows `TWO_WEEKS` grey on legacy threads that have a hand-written `ONE_MONTH` review (cosmetic); the frontend does not zod-validate `GET /api/config` (no zod dependency in the frontend).
 - The CI Postgres service container's healthcheck still uses socket-based `pg_isready` (the dev compose file was fixed in PR #4); harmless so far because Jest's `globalSetup` migrates first and fails loudly.
 - The frontend production build warns about a chunk over 500 kB; route-level code splitting would fix it.
 - `npm ci` warns that ESLint 9 is no longer supported; plan the ESLint 10 upgrade.
