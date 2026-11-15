@@ -61,7 +61,7 @@ What exists today and matters here:
 - **Known address.** Create nothing and change nothing. Hash the password anyway, so both paths do the same work. Send the address's owner a short "Someone tried to create a Verdict account with this address. If it was you, just sign in" email, at most once per address per hour (D4).
 - **No sign-in after register (change 1).** The response carries no tokens and the frontend makes no login call. For every address it shows the same "Check your email, then sign in." screen; the user signs in (which works before verifying, D8). A test asserts identical status, body and headers for a known and an unknown address, that the password is hashed on both paths, and that median timing is within a factor of 2.
 - **Login timing.** Login runs bcrypt against a fixed dummy hash when the email is unknown, so its timing no longer reveals unknown addresses.
-- **Email sends happen after the response** (D5) in both register paths, so the provider's latency does not reveal which path ran.
+- **Before the response both paths do exactly the same work** (validation, username check, password hash). Looking up the email, creating the account, issuing the token and sending the email all happen after the 202 (D5), so neither the answer nor its timing depends on whether the address is registered. If the account insert then loses a race (the username or the address was taken a moment earlier), nothing is created; the user finds out when signing in and can register again.
 
 *Alternatives considered:*
 - Keep the 409. It is simple, but it is the enumeration the requirement rules out.
@@ -79,7 +79,7 @@ What exists today and matters here:
 | Per target address (change 3): verification emails, and "someone tried to sign up" emails | 1 of each kind per address per hour | DB: `email_rate_events`, keyed by sha256 of the normalized address, under an advisory lock | Works when no user owns the address (email change to a new address); stops register, resend and email change from being used to flood an inbox. Claimed **before** a token is issued, so a refused resend leaves the current link valid; released if the provider rejects the email. |
 | Email-change attempts (change 3) | 5 per user per hour, right or wrong password | DB: `email_rate_events` keyed by user id | Limits password guessing and address probing through the change form. |
 
-- **Interaction.** With one verification email per address per hour, the 60 s cooldown and the 5-per-hour cap only bind across different addresses (email changes); for one address the hourly limit is reached first. The resend button therefore works at most once an hour per address, or at once again if the previous send failed.
+- **Interaction.** With one verification email per address per hour, the 60 s cooldown and the 5-per-hour cap only bind across different addresses (email changes); for one address the hourly limit is reached first. The resend button therefore works at most once an hour per address. If the previous send failed (the provider rejected it), its slot is released at once; if the process died before sending, the slot stops counting after 5 minutes (`email_rate_events.sentAt` is set only when the provider accepts the email). The 60 s cooldown still applies in both cases.
 - **Responses.** Limits return **429** with `Retry-After`. The 429 for the per-user cooldown is only on the authenticated resend, which reveals nothing about other accounts. On **register**, the per-IP 429 is the only rate response, and it does not depend on whether the address exists. The per-address notice limit just skips the email silently, so the response stays the same 202.
 - **No response reveals whether an address is registered.** That covers register (D3), login (identical 401, constant work), resend (authenticated: it acts on the caller's own address only, and the body takes no address) and email change (D7, open question Q3).
 
@@ -91,7 +91,7 @@ What exists today and matters here:
 
 - **Transactional (change 2).** Verification, "someone tried to sign up" and "email changed" emails ignore the nudge rules: the email-reminder opt-in, the nudge daily cap and `NUDGE_REQUIRE_VERIFIED_EMAIL` (a verification email goes to an unverified address by definition). Only the per-address limit (D4) applies. A test with a real provider, an opted-out unverified user and `NUDGE_REQUIRE_VERIFIED_EMAIL=true` fails if any of those gates is applied.
 - **Sending.** Verification emails go through the existing `EmailProvider`: dry-run by default, Resend when configured. The message is built by a new `renderVerificationEmail` and carries `Idempotency-Key: verify/<tokenId>`.
-- **When.** Each email is sent **once, after the HTTP response, after the transaction that created the token commits**. A failure is logged with the token id and the provider error, and is not retried automatically.
+- **When.** Each email is sent **once, after the HTTP response, after the transaction that created the token commits**. A failure is logged with the token id and the provider error, and is not retried automatically. On SIGTERM/SIGINT the server stops accepting requests and gives in-flight account emails up to 10 s; one that still never goes out frees its address slot after 5 minutes.
 - **Recommendation: this simple option, not the nudge retry engine.**
   - **It cannot lose a user.** The soft gate (D8) means a failed send never locks anyone out: they are logged in, see the banner, and can press "Resend" once the provider recovers. The token row exists either way.
   - **The user is present.** The nudge engine exists because nudges are scheduled weeks ahead for users who are not online. Verification happens while the user is in the app, so a human-driven retry is enough. Background retries could deliver a stale email minutes later, after the user has already requested a newer one, and that stale link would be superseded and fail.
@@ -104,7 +104,7 @@ What exists today and matters here:
 
 ### D6. Dev experience
 
-- **Dry run.** With the `console` provider the email is logged (as nudge emails are), including the full verification link. The dry-run outbox keeps it in memory.
+- **Dry run.** With the `console` provider the email is logged (as nudge emails are); the full verification link is logged **only when `NODE_ENV` is development or test** (a live token in staging or production logs would let anyone who reads them verify the address). The dry-run outbox keeps it in memory.
 - **`GET /api/auth/dev/verification-link`** (authenticated) returns your own newest verification link from the dry-run outbox, or 404 if there is none. It uses the **same `NODE_ENV` allow-list as the nudge dev routes** (`development` or `test`; 404 for anything else, including unset or `staging`). The shared `devOnly` guard moves to `backend/src/middleware/devOnly.ts` so both routers use one definition.
 - **Why read the outbox, not the database:** the database stores only hashes (D1). The plaintext link exists only in the message that was "sent".
 
@@ -119,6 +119,7 @@ What exists today and matters here:
 - **After commit:**
   - Send the verification email to the **new** address.
   - Send a notice to the **old** address: "The email address on your Verdict account was changed to n\*\*\*@example.com. If you didn't do this, contact support." The new address is masked. The notice has no link to undo the change; that needs an account-recovery flow, which is out of scope and listed as a follow-up.
+- **Lock order.** Every transaction that touches a user's tokens (issue, consume, email change) first locks the user row (`SELECT … FOR UPDATE`), so they serialize per user and cannot deadlock; issuing re-checks the address under that lock, so a resend racing an email change cannot issue a link for the old address and supersede the new one (it answers 409).
 - **Tokens bind to an address.** A token stores the address it was issued for. Confirming it requires `token.email === user.email`, so a link sent to an old address can never verify a new one, even if it was somehow not superseded.
 - **Nudges** need no change: until the new address is verified, real-provider nudges go in-app only (existing gate). Email consent (`emailNudgesEnabled`) is kept (open question Q4).
 - **Same address.** Submitting the current address is a no-op (200, nothing sent).
@@ -226,7 +227,6 @@ All on real Postgres, with the provider mocked:
 
 - Password reset.
 - Account recovery or undo for a changed email.
-- Normalising email case (Q6).
 - CAPTCHA.
 - An unauthenticated "resend by address" endpoint. Not needed with the soft gate, since users can always log in, and it would be both an enumeration and a spam vector.
 - The full settings page (backlog #8). The email-change form goes on the existing profile page.

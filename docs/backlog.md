@@ -26,6 +26,7 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 | 11 | 12 | [Pending email change (confirm before switching)](#12-pending-email-change-confirm-before-switching) | M | Removes the remaining enumeration (409) in email change; fits with #8 |
 | 12 | 13 | [Rename the email provider settings to `EMAIL_*`](#13-rename-the-email-provider-settings-to-email_) | S | Naming only; account emails now share the nudge settings |
 | 13 | 14 | [Opt-in prompt follow-ups from the Sprint 2 review](#14-opt-in-prompt-follow-ups-from-the-sprint-2-review) | S | Small; one is a real gap (prompt never shown for a later-stage first review) |
+| 2* | 15 | [Unverified accounts can squat an address](#15-unverified-accounts-can-squat-an-address) | M | Security; rank right after #4 (needs password reset or expiry of unverified accounts) |
 
 ---
 
@@ -198,6 +199,18 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 - **One test cannot fail:** `rejects {"nudgePromptDismissedAt": null}` in `backend/tests/nudges/api.test.ts` already passed before the field existed (the schema is `.strict()`). Keep it as a guard, but add a test that fails without the dismiss endpoint's own rules if there is a gap.
 - **No test for a failed decline:** the button should come back, the error show, and the prompt stay.
 - **Duplicated error message:** if both the opt-in and the decline fail, "Could not save" shows twice; after a successful decline, a short "You can turn reminders on in your profile" would help.
+
+---
+
+## 15. Unverified accounts can squat an address
+**Size:** M (Sprint 2 reviewer finding)
+
+**Problem.** Anyone can register `victim@example.com` with their own password; the account stays unverified indefinitely. When the real owner registers later they get the same 202 and a "someone tried to sign up" email, but cannot sign in (no password reset exists), so the address is effectively taken.
+
+**Acceptance criteria**
+- Unverified accounts with no activity expire after N days (decision needed), and/or a password-reset flow via the address takes ownership (verifying the address proves it).
+- The "someone tried to sign up" email points to that recovery path.
+- Tests for both; no change to the no-enumeration guarantees.
 
 ---
 
