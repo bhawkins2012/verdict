@@ -12,6 +12,7 @@ import { productsRouter } from './routes/products'
 import { reviewsRouter } from './routes/reviews'
 import { recommendationsRouter } from './routes/recommendations'
 import { nudgesRouter } from './routes/nudges'
+import { configRouter } from './routes/config'
 import { errorHandler } from './middleware/errorHandler'
 import { setupSwagger } from './lib/swagger'
 import { logger } from './lib/logger'
@@ -48,6 +49,7 @@ app.use('/api/products', productsRouter)
 app.use('/api/reviews', reviewsRouter)
 app.use('/api/recommendations', recommendationsRouter)
 app.use('/api/nudges', nudgesRouter)
+app.use('/api/config', configRouter)
 
 // ── Health Check ───────────────────────────────────────────
 app.get('/health', (_, res) => {

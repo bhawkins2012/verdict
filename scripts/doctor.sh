@@ -120,6 +120,12 @@ else
   else
     warn "seed: $(field users) users but alice@example.com is missing (demo login won't work)" "npm run db:seed (only on a database you can reset)"
   fi
+
+  if [ "$db_rc" -eq 0 ]; then
+    failed_nudges=$(field failedNudges)
+    if [ "${failed_nudges:-0}" = "0" ]; then ok "nudges: no dead-lettered emails"
+    else warn "nudges: ${failed_nudges} email(s) dead-lettered (status FAILED; still shown in-app)" "see 'Nudge email dead-lettered' in the backend log for the provider error"; fi
+  fi
 fi
 
 echo

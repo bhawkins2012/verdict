@@ -6,7 +6,8 @@ Quantifies how a user's opinion of a product has changed over time.
 
 from dataclasses import dataclass
 
-STAGE_ORDER = ["INITIAL", "ONE_WEEK", "ONE_MONTH", "THREE_MONTHS", "SIX_MONTHS", "ONE_YEAR", "TWO_YEARS", "CUSTOM"]
+# Chronological order of every ReviewStage (must match the Prisma enum; tests/test_stages.py checks it).
+STAGE_ORDER = ["INITIAL", "ONE_WEEK", "TWO_WEEKS", "ONE_MONTH", "THREE_MONTHS", "SIX_MONTHS", "ONE_YEAR", "TWO_YEARS", "CUSTOM"]
 
 
 @dataclass

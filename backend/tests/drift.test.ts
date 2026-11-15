@@ -81,4 +81,17 @@ describe('computeThreadDrift', () => {
     await computeThreadDrift(threadB.id)
     expect((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).driftScoreAvg).toBe(-1)
   })
+
+  it('orders TWO_WEEKS between ONE_WEEK and ONE_MONTH (not by capture time)', async () => {
+    const user = await registerUser(); userIds.push(user.id)
+    const product = await createProduct(); productIds.push(product.id)
+    const now = Date.now()
+    // Captured out of order: the 1-month review was entered before the 2-week one.
+    const thread = await makeThread(user.id, product.id, [
+      { stage: 'INITIAL', score: 8, capturedAt: new Date(now - 3000) },
+      { stage: 'ONE_MONTH', score: 4, capturedAt: new Date(now - 2000) },
+      { stage: 'TWO_WEEKS', score: 6, capturedAt: new Date(now - 1000) },
+    ])
+    expect(await computeThreadDrift(thread.id)).toBe(-4) // latest stage is ONE_MONTH
+  })
 })

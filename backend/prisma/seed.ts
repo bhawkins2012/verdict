@@ -161,6 +161,8 @@ async function main() {
   // Alice's espresso machine journey (bought 14 months ago)
   const aliceEspressoThread = await prisma.reviewThread.create({
     data: {
+      // The thread starts at its first (INITIAL) review, as it does in the app.
+      startedAt: subMonths(new Date(), 14),
       userId: alice.id,
       productId: espressoMachine.id,
       stagesCompleted: [ReviewStage.INITIAL, ReviewStage.ONE_WEEK, ReviewStage.ONE_MONTH, ReviewStage.ONE_YEAR],
@@ -234,6 +236,8 @@ async function main() {
   // Bob's standing desk journey (bought 8 months ago)
   const bobDeskThread = await prisma.reviewThread.create({
     data: {
+      // The thread starts at its first (INITIAL) review, as it does in the app.
+      startedAt: subMonths(new Date(), 8),
       userId: bob.id,
       productId: standingDesk.id,
       stagesCompleted: [ReviewStage.INITIAL, ReviewStage.ONE_MONTH, ReviewStage.SIX_MONTHS],
@@ -287,6 +291,8 @@ async function main() {
   // Carol's air purifier (bought 15 months ago — big drift downward)
   const carolAirThread = await prisma.reviewThread.create({
     data: {
+      // The thread starts at its first (INITIAL) review, as it does in the app.
+      startedAt: subMonths(new Date(), 15),
       userId: carol.id,
       productId: airPurifier.id,
       stagesCompleted: [ReviewStage.INITIAL, ReviewStage.ONE_MONTH, ReviewStage.ONE_YEAR],
@@ -331,6 +337,8 @@ async function main() {
   // Bob's hiking boots — only initial so far, nudge pending
   const bobBootsThread = await prisma.reviewThread.create({
     data: {
+      // The thread starts at its first (INITIAL) review, as it does in the app.
+      startedAt: subWeeks(new Date(), 3),
       userId: bob.id,
       productId: hikingBoots.id,
       stagesCompleted: [ReviewStage.INITIAL],
@@ -356,8 +364,9 @@ async function main() {
         create: [
           {
             userId: bob.id,
-            targetStage: ReviewStage.ONE_MONTH,
+            targetStage: ReviewStage.TWO_WEEKS,
             scheduledFor: addWeeks(new Date(), 1),
+            sendAt: addWeeks(new Date(), 1),
             status: NudgeStatus.PENDING,
           }
         ]

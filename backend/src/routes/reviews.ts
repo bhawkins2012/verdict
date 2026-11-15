@@ -4,7 +4,11 @@ import { Prisma, ReviewStage, ReviewSource } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
-import { scheduleNudges } from '../jobs/nudgeScheduler'
+import { purchaseDateSchema } from '../lib/purchaseDate'
+import { STAGE_ORDER } from '../stages'
+import { completeNudgesForReview } from '../nudges/lifecycle'
+import { planInputFromRows, planThreadNudge } from '../nudges/planner'
+import { enqueueAfterCommit } from '../nudges/runtime'
 import { computeThreadDrift } from '../services/driftService'
 import { enrichReviewWithNLP, NLPEnrichment } from '../services/mlClient'
 
@@ -23,6 +27,8 @@ const reviewSchema = z.object({
   cons: z.array(z.string().max(200)).max(10).default([]),
   wouldStillBuy: z.boolean().optional(),
   wouldRecommend: z.boolean().optional(),
+  // Optional: when the user got the product. Anchors the nudge schedule (docs/adr-nudges.md D3).
+  purchasedAt: purchaseDateSchema().optional(),
 })
 
 // GET /api/reviews/thread/:productId — get full thread for a product
@@ -39,7 +45,14 @@ reviewsRouter.get('/thread/:productId', authenticate, async (req: Request, res: 
   })
 
   if (!thread) throw new AppError(404, 'No review thread found for this product')
-  res.json(thread)
+
+  // The next check-in, from the same planner that schedules nudges (skips, overdue collapse and all),
+  // so the thread page's "write your next review" button cannot disagree with the emails.
+  const allNudges = await prisma.nudge.findMany({ where: { threadId: thread.id }, select: { targetStage: true, status: true, sentAt: true } })
+  const plan = planThreadNudge(
+    planInputFromRows({ anchor: thread.purchasedAt ?? thread.startedAt, reviews: thread.reviews, nudges: allNudges, now: new Date() })
+  )
+  res.json({ ...thread, nextCheckIn: plan ? { stage: plan.stage, dueAt: plan.dueAt } : null })
 })
 
 // GET /api/reviews/threads — get all threads for current user
@@ -62,7 +75,7 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   const body = reviewSchema.safeParse(req.body)
   if (!body.success) throw new AppError(400, body.error.errors[0].message)
 
-  const { productId, stage, ...reviewData } = body.data
+  const { productId, stage, purchasedAt, ...reviewData } = body.data
   const userId = req.userId!
 
   // Verify product exists
@@ -92,18 +105,19 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   }
 
   let review
+  let nudgesToEnqueue: string[] = []
   try {
     review = await prisma.$transaction(async (tx) => {
       // Upsert thread
       const updatedThread = await tx.reviewThread.upsert({
         where: { userId_productId: { userId, productId } },
-        create: { userId, productId, stagesCompleted: [stage] },
-        update: { stagesCompleted: { push: stage }, updatedAt: new Date() },
+        create: { userId, productId, stagesCompleted: [stage], purchasedAt },
+        update: { stagesCompleted: { push: stage }, updatedAt: new Date(), ...(purchasedAt ? { purchasedAt } : {}) },
       })
 
       // Create review. A duplicate stage violates the unique constraint, which
       // aborts the transaction, so stagesCompleted is rolled back with it.
-      return tx.review.create({
+      const created = await tx.review.create({
         data: {
           threadId: updatedThread.id,
           stage,
@@ -114,6 +128,10 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
           summaryAuto: nlpData.summaryAuto,
         }
       })
+
+      // Same transaction: complete this stage's nudge, cancel earlier ones, plan the next one.
+      nudgesToEnqueue = await completeNudgesForReview(tx, updatedThread.id, stage, new Date())
+      return created
     })
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -123,9 +141,9 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     throw err
   }
 
-  // Compute drift and schedule next nudge (async)
+  // After commit: compute drift and schedule delivery (both best effort; the reconciler covers enqueue)
   computeThreadDrift(review.threadId).catch(console.error)
-  scheduleNudges(review.threadId, stage, userId).catch(console.error)
+  enqueueAfterCommit(nudgesToEnqueue)
 
   res.status(201).json(review)
 })
@@ -182,7 +200,7 @@ reviewsRouter.get('/product/:productId/stats', async (req: Request, res: Respons
 
   // Compute survivorship curve: avg score per stage
   const byStage: Record<string, { scores: number[], count: number }> = {}
-  const stageOrder = ['INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS']
+  const stageOrder = STAGE_ORDER.filter((s) => s !== 'CUSTOM')
 
   for (const r of reviews) {
     if (!byStage[r.stage]) byStage[r.stage] = { scores: [], count: 0 }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import axios from 'axios'
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -20,6 +21,7 @@ interface ReviewPayload {
   scoreOverall?: number
   bodyText?: string
   pros: string[]
+  purchasedAt?: string // YYYY-MM-DD, first review only
   cons: string[]
   wouldStillBuy?: boolean
   wouldRecommend?: boolean
@@ -39,6 +41,7 @@ export function WriteReviewPage() {
   const [pros, setPros] = useState<string[]>([''])
   const [cons, setCons] = useState<string[]>([''])
   const [wouldStillBuy, setWouldStillBuy] = useState<boolean | null>(null)
+  const [purchasedAt, setPurchasedAt] = useState('')
   const [wouldRecommend, setWouldRecommend] = useState<boolean | null>(null)
   const [step, setStep] = useState<'scores' | 'details'>('scores')
 
@@ -47,13 +50,13 @@ export function WriteReviewPage() {
     queryFn: () => api.get(`/products/${productId}`).then(r => r.data),
   })
 
-  const { mutate: submit, isPending } = useMutation({
+  const { mutate: submit, isPending, error: submitError } = useMutation({
     mutationFn: (data: ReviewPayload) => api.post('/reviews', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['threads'] })
       queryClient.invalidateQueries({ queryKey: ['thread', productId] })
       queryClient.invalidateQueries({ queryKey: ['nudges'] })
-      navigate(`/products/${productId}/thread`)
+      navigate(`/products/${productId}/thread`, { state: { firstReview: stage === 'INITIAL' } })
     },
   })
 
@@ -66,6 +69,7 @@ export function WriteReviewPage() {
       pros: pros.filter(Boolean),
       cons: cons.filter(Boolean),
       wouldStillBuy: wouldStillBuy ?? undefined,
+      purchasedAt: stage === 'INITIAL' && purchasedAt ? purchasedAt : undefined,
       wouldRecommend: wouldRecommend ?? undefined,
     })
   }
@@ -149,6 +153,20 @@ export function WriteReviewPage() {
       {/* Step 2: Details */}
       {step === 'details' && (
         <div className="space-y-6 animate-fade-in">
+          {stage === 'INITIAL' && (
+            <div>
+              <label className="label" htmlFor="purchasedAt">When did you get it? <span className="text-ink-400 font-normal">(optional)</span></label>
+              <input
+                id="purchasedAt"
+                type="date"
+                className="input max-w-xs"
+                max={localToday()}
+                value={purchasedAt}
+                onChange={e => setPurchasedAt(e.target.value)}
+              />
+              <p className="text-xs text-ink-400 mt-1">Check-ins are timed from this date. Leave it empty if you just got it.</p>
+            </div>
+          )}
           {/* Review text */}
           <div>
             <label className="label">Your review</label>
@@ -254,6 +272,11 @@ export function WriteReviewPage() {
               {isPending ? 'Submitting...' : 'Submit review'}
             </button>
           </div>
+          {submitError && (
+            <p role="alert" className="text-sm text-red-600">
+              {(axios.isAxiosError<{ error?: string }>(submitError) && submitError.response?.data?.error) || 'Could not save your review. Please try again.'}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -311,4 +334,10 @@ function BooleanToggle({ label, value, onChange }: {
       </div>
     </div>
   )
+}
+
+/** Today's date in the user's own time zone, as YYYY-MM-DD (for the date input's max). */
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

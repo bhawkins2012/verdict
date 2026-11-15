@@ -1,15 +1,14 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { ReviewThread, ReviewStage, Nudge, STAGE_LABELS } from '../types'
+import { ReviewThread, Nudge, STAGE_LABELS } from '../types'
+import { trackedStages, useStageConfig } from '../lib/stages'
 import { useAuthStore } from '../store/authStore'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { ScoreRing } from '../components/ui/ScoreRing'
 import { formatDistanceToNow } from 'date-fns'
 import { ArrowRight, Clock, CheckCircle2, Sparkles, Plus } from 'lucide-react'
 import clsx from 'clsx'
-
-const TRACKED_STAGES: ReviewStage[] = ['INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR']
 
 export function DashboardPage() {
   const { user } = useAuthStore()
@@ -146,6 +145,7 @@ export function DashboardPage() {
 }
 
 function ThreadCard({ thread }: { thread: ReviewThread }) {
+  const { data: stageConfig } = useStageConfig()
   const latestReview = thread.reviews?.[0]
   const stageCount = thread.stagesCompleted?.length || 0
 
@@ -185,7 +185,7 @@ function ThreadCard({ thread }: { thread: ReviewThread }) {
 
         {/* Stage progress */}
         <div className="flex gap-1 mt-3">
-          {TRACKED_STAGES.map(stage => (
+          {(stageConfig ? trackedStages(stageConfig) : []).map(stage => (
             <div
               key={stage}
               className={clsx(
@@ -204,8 +204,20 @@ function ThreadCard({ thread }: { thread: ReviewThread }) {
   )
 }
 
+const MAX_SNOOZES = 3
+
 function NudgeCard({ nudge }: { nudge: Nudge }) {
   const product = nudge.thread?.product
+  const queryClient = useQueryClient()
+  const refresh = () => {
+    // The nav badge, banner, list and stats card all read the same due-only data.
+    queryClient.invalidateQueries({ queryKey: ['nudges'] })
+    queryClient.invalidateQueries({ queryKey: ['user-stats'] })
+  }
+  const skip = useMutation({ mutationFn: () => api.post(`/nudges/${nudge.id}/skip`), onSuccess: refresh })
+  const snooze = useMutation({ mutationFn: (days: 7 | 30) => api.post(`/nudges/${nudge.id}/snooze`, { days }), onSuccess: refresh })
+  const busy = skip.isPending || snooze.isPending
+  const canSnooze = (nudge.snoozeCount ?? 0) < MAX_SNOOZES
 
   return (
     <div className="card p-5 flex items-center gap-5 border-amber-200 bg-amber-50/50">
@@ -217,6 +229,22 @@ function NudgeCard({ nudge }: { nudge: Nudge }) {
           Time for your <span className="text-amber-700">{STAGE_LABELS[nudge.targetStage]}</span> review
         </p>
         <p className="text-sm text-ink-500">{product?.name}</p>
+        <div className="flex flex-wrap gap-3 mt-2 text-xs">
+          {canSnooze && (
+            <>
+              <button type="button" disabled={busy} onClick={() => snooze.mutate(7)} className="text-ink-500 hover:text-ink-800 underline-offset-2 hover:underline disabled:opacity-50">
+                Remind me in a week
+              </button>
+              <button type="button" disabled={busy} onClick={() => snooze.mutate(30)} className="text-ink-500 hover:text-ink-800 underline-offset-2 hover:underline disabled:opacity-50">
+                In a month
+              </button>
+            </>
+          )}
+          <button type="button" disabled={busy} onClick={() => skip.mutate()} className="text-ink-500 hover:text-ink-800 underline-offset-2 hover:underline disabled:opacity-50">
+            Skip this check-in
+          </button>
+        </div>
+        {(skip.isError || snooze.isError) && <p className="text-xs text-red-600 mt-1">Something went wrong. Please try again.</p>}
       </div>
       <Link
         to={`/products/${product?.id}/review?stage=${nudge.targetStage}&nudgeId=${nudge.id}`}

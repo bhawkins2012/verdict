@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { ReviewThread, Review, STAGE_LABELS, STAGE_ORDER } from '../types'
+import { ReviewThread, Review, STAGE_LABELS } from '../types'
+import { sortByStage, useStageConfig } from '../lib/stages'
+import { CheckinOptInPrompt } from '../components/settings/CheckinOptInPrompt'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { ScoreRing } from '../components/ui/ScoreRing'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
@@ -11,6 +14,16 @@ import clsx from 'clsx'
 
 export function ReviewThreadPage() {
   const { id: productId } = useParams<{ id: string }>()
+  const location = useLocation()
+  const navigate = useNavigate()
+  // Read once, then clear the history state so a reload does not bring the prompt back.
+  const [justWroteFirstReview] = useState(() => (location.state as { firstReview?: boolean } | null)?.firstReview === true)
+  useEffect(() => {
+    if (justWroteFirstReview) navigate(location.pathname + location.search, { replace: true, state: null })
+  }, [justWroteFirstReview, navigate, location.pathname, location.search])
+  // Stage order comes from GET /api/config. If it fails, the page still renders (reviews arrive in
+  // capture order); only the order is lost, never the page.
+  const { data: stageConfig } = useStageConfig()
 
   const { data: thread, isLoading } = useQuery<ReviewThread>({
     queryKey: ['thread', productId],
@@ -25,11 +38,9 @@ export function ReviewThreadPage() {
   if (isLoading) return <LoadingSkeleton />
   if (!thread) return null
 
-  const sortedReviews = [...(thread.reviews || [])].sort(
-    (a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)
-  )
-  const completedStages = new Set(thread.stagesCompleted)
-  const nextStage = STAGE_ORDER.find(s => !completedStages.has(s))
+  const sortedReviews = stageConfig ? sortByStage(stageConfig, thread.reviews || []) : thread.reviews || []
+  // The next check-in comes from the backend planner (same rules as the emails: skips, overdue collapse).
+  const nextStage = thread.nextCheckIn?.stage ?? null
 
   const initialScore = sortedReviews[0]?.scoreOverall
   const latestScore = sortedReviews[sortedReviews.length - 1]?.scoreOverall
@@ -40,6 +51,8 @@ export function ReviewThreadPage() {
       <Link to="/dashboard" className="btn-ghost flex items-center gap-2 mb-6 -ml-2 w-fit">
         <ArrowLeft size={16} /> Dashboard
       </Link>
+
+      {justWroteFirstReview && <CheckinOptInPrompt />}
 
       {/* Product header */}
       <div className="card p-6 mb-6">

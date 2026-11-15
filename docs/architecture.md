@@ -41,6 +41,7 @@
 ```
 INITIAL:       0.60
 ONE_WEEK:      0.70
+TWO_WEEKS:     0.78
 ONE_MONTH:     0.85
 THREE_MONTHS:  0.90
 SIX_MONTHS:    0.95

@@ -4,6 +4,9 @@ import { AgeRange, IncomeBracket, EducationLevel } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
+import { dueNudgesWhere, syncThreadNudges } from '../nudges/lifecycle'
+import { enqueueAfterCommit } from '../nudges/runtime'
+import { isValidTimeZone } from '../nudges/time'
 
 export const usersRouter = Router()
 
@@ -25,7 +28,7 @@ usersRouter.get('/me/stats', authenticate, async (req: Request, res: Response) =
   const [threadCount, reviewCount, pendingNudges] = await Promise.all([
     prisma.reviewThread.count({ where: { userId } }),
     prisma.review.count({ where: { thread: { userId } } }),
-    prisma.nudge.count({ where: { userId, status: 'PENDING' } }),
+    prisma.nudge.count({ where: dueNudgesWhere(userId, new Date()) }), // same rule as GET /api/nudges
   ])
 
   // Avg drift across all threads
@@ -66,4 +69,77 @@ usersRouter.get('/me/activity', authenticate, async (req: Request, res: Response
     take: 20,
   })
   res.json(threads)
+})
+
+// ── Nudge notification settings (docs/adr-nudges.md D5) ──────────────────────────────────────────
+
+const notificationSettingsSelect = {
+  emailNudgesEnabled: true,
+  emailNudgesConsentAt: true,
+  timezone: true,
+  nudgeSendHour: true,
+  emailVerified: true,
+  nudgePromptDismissedAt: true,
+} as const
+
+const notificationSettingsSchema = z
+  .object({
+    emailNudgesEnabled: z.boolean().optional(),
+    timezone: z.string().max(64).refine(isValidTimeZone, 'timezone must be an IANA time zone, e.g. "Europe/Berlin"').optional(),
+    nudgeSendHour: z.number().int().min(0).max(23).optional(),
+  })
+  .strict()
+
+// GET /api/users/me/notification-settings
+usersRouter.get('/me/notification-settings', authenticate, async (req: Request, res: Response) => {
+  const settings = await prisma.user.findUnique({ where: { id: req.userId! }, select: notificationSettingsSelect })
+  if (!settings) throw new AppError(404, 'User not found')
+  res.json(settings)
+})
+
+// POST /api/users/me/nudge-prompt/dismiss — the user declined the post-first-review email prompt.
+// Records the first decline only; the prompt is never shown again. Changes no other setting, and
+// nothing else (opting in or out on the profile) clears it.
+usersRouter.post('/me/nudge-prompt/dismiss', authenticate, async (req: Request, res: Response) => {
+  await prisma.user.updateMany({ where: { id: req.userId!, nudgePromptDismissedAt: null }, data: { nudgePromptDismissedAt: new Date() } })
+  const settings = await prisma.user.findUnique({ where: { id: req.userId! }, select: notificationSettingsSelect })
+  if (!settings) throw new AppError(404, 'User not found')
+  res.json(settings)
+})
+
+// PUT /api/users/me/notification-settings — opt in/out of email, time zone, preferred send hour
+usersRouter.put('/me/notification-settings', authenticate, async (req: Request, res: Response) => {
+  const body = notificationSettingsSchema.safeParse(req.body)
+  if (!body.success) throw new AppError(400, body.error.errors[0].message)
+  const userId = req.userId!
+  const { emailNudgesEnabled, timezone, nudgeSendHour } = body.data
+  const now = new Date()
+
+  const { settings, enqueue } = await prisma.$transaction(async (tx) => {
+    const current = await tx.user.findUnique({ where: { id: userId }, select: notificationSettingsSelect })
+    if (!current) throw new AppError(404, 'User not found')
+
+    // Record when consent was given; clear it on opt-out.
+    const consent =
+      emailNudgesEnabled === undefined || emailNudgesEnabled === current.emailNudgesEnabled
+        ? {}
+        : { emailNudgesConsentAt: emailNudgesEnabled ? now : null }
+
+    const settings = await tx.user.update({
+      where: { id: userId },
+      data: { emailNudgesEnabled, timezone, nudgeSendHour, ...consent },
+      select: notificationSettingsSelect,
+    })
+
+    // A new time zone or send hour moves every pending nudge's send time: re-plan the user's threads.
+    const enqueue: string[] = []
+    if ((timezone !== undefined && timezone !== current.timezone) || (nudgeSendHour !== undefined && nudgeSendHour !== current.nudgeSendHour)) {
+      const threads = await tx.reviewThread.findMany({ where: { userId }, select: { id: true } })
+      for (const t of threads) enqueue.push(...(await syncThreadNudges(tx, t.id, now, { retime: true })))
+    }
+    return { settings, enqueue }
+  })
+
+  enqueueAfterCommit(enqueue)
+  res.json(settings)
 })

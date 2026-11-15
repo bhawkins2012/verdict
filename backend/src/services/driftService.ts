@@ -1,6 +1,5 @@
 import { prisma } from '../lib/prisma'
-
-const STAGE_ORDER = ['INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS', 'CUSTOM']
+import { stageRank } from '../stages'
 
 export async function computeThreadDrift(threadId: string): Promise<number | null> {
   const reviews = await prisma.review.findMany({
@@ -13,7 +12,7 @@ export async function computeThreadDrift(threadId: string): Promise<number | nul
 
   // Sort by stage order
   const sorted = reviews.sort((a, b) =>
-    STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)
+    rankForDrift(a.stage) - rankForDrift(b.stage)
   )
 
   const initial = sorted[0].scoreOverall
@@ -40,4 +39,10 @@ export async function computeThreadDrift(threadId: string): Promise<number | nul
   }
 
   return drift
+}
+
+/** Chronological order for drift; CUSTOM (no place on the timeline) sorts last. */
+function rankForDrift(stage: Parameters<typeof stageRank>[0]): number {
+  const rank = stageRank(stage)
+  return rank < 0 ? Number.MAX_SAFE_INTEGER : rank
 }

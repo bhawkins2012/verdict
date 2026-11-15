@@ -1,8 +1,7 @@
 import { api, bearer, cleanup, createProduct, registerUser } from './helpers'
 import { prisma } from '../src/lib/prisma'
 
-// Redis-backed scheduling and fire-and-forget drift are exercised elsewhere / not under test here.
-jest.mock('../src/jobs/nudgeScheduler', () => ({ scheduleNudges: jest.fn().mockResolvedValue(undefined) }))
+// Fire-and-forget drift is exercised in drift.test.ts. Nudge enqueueing is a no-op here (no runtime started).
 jest.mock('../src/services/driftService', () => ({ computeThreadDrift: jest.fn().mockResolvedValue(null) }))
 
 const userIds: string[] = []
@@ -175,5 +174,17 @@ describe('POST /api/reviews: NLP enrichment', () => {
 
     expect(res.status).toBe(201)
     expect(res.body.sentimentScore).toBeNull()
+  })
+})
+
+describe('GET /api/reviews/product/:id/stats', () => {
+  it('orders the survivorship curve chronologically, with 2 weeks between 1 week and 1 month', async () => {
+    const { post } = await setup()
+    for (const stage of ['ONE_MONTH', 'INITIAL', 'TWO_WEEKS', 'ONE_WEEK']) {
+      expect((await post({ stage })).status).toBe(201)
+    }
+    const thread = await prisma.review.findFirstOrThrow({ where: { stage: 'INITIAL', thread: { userId: userIds[userIds.length - 1] } }, select: { thread: { select: { productId: true } } } })
+    const res = await api().get(`/api/reviews/product/${thread.thread.productId}/stats`)
+    expect(res.body.survivorshipCurve.map((p: { stage: string }) => p.stage)).toEqual(['INITIAL', 'ONE_WEEK', 'TWO_WEEKS', 'ONE_MONTH'])
   })
 })
