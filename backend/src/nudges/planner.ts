@@ -15,6 +15,7 @@ export const SCHEDULED_STAGES: readonly ReviewStage[] = [
 export const STAGE_LABEL: Record<ReviewStage, string> = {
   INITIAL: 'first impression',
   ONE_WEEK: '1 week',
+  TWO_WEEKS: '2 weeks',
   ONE_MONTH: '1 month',
   THREE_MONTHS: '3 months',
   SIX_MONTHS: '6 months',
