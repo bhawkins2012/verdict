@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/authStore'
 import { CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 import { EmailRemindersCard } from '../components/settings/EmailRemindersCard'
+import { ChangeEmailCard } from '../components/account/ChangeEmailCard'
 
 const AGE_RANGES = [
   { value: 'AGE_18_24', label: '18–24' },
@@ -122,6 +123,7 @@ export function ProfilePage() {
         </div>
       </div>
 
+      <ChangeEmailCard />
       <EmailRemindersCard />
 
       <div className="card p-6 mb-4">

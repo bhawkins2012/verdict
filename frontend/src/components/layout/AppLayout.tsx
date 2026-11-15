@@ -1,5 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp } from 'lucide-react'
+import { VerificationBanner } from '../account/VerificationBanner'
 import { useAuthStore } from '../../store/authStore'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
@@ -108,6 +109,7 @@ export function AppLayout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto">
+        <VerificationBanner />
         <Outlet />
       </main>
     </div>

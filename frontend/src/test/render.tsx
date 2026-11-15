@@ -14,6 +14,12 @@ export function newQueryClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
+/** "/a?b=1#c" -> { pathname: "/a", search: "?b=1", hash: "#c" } */
+function splitPath(path: string) {
+  const u = new URL(path, 'http://test.invalid')
+  return { pathname: u.pathname, search: u.search, hash: u.hash }
+}
+
 export interface Rendered {
   container: HTMLDivElement
   unmount: () => void
@@ -30,7 +36,7 @@ export function render(element: ReactElement, opts: { route?: string; path?: str
     root = createRoot(container)
     root.render(
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={[{ pathname: path, state: opts.state ?? null }]}>
+        <MemoryRouter initialEntries={[{ ...splitPath(path), state: opts.state ?? null }]}>
           <Routes>
             <Route path={opts.route ?? '/'} element={element} />
           </Routes>

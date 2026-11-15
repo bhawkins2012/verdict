@@ -15,6 +15,7 @@ import { ReviewThreadPage } from './pages/ReviewThreadPage'
 import { WriteReviewPage } from './pages/WriteReviewPage'
 import { RecommendationsPage } from './pages/RecommendationsPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { VerifyEmailPage } from './pages/VerifyEmailPage'
 import { useAuthStore } from './store/authStore'
 
 const queryClient = new QueryClient({
@@ -38,6 +39,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route element={<AuthLayout />}>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            {/* Public: the link may be opened on a device where the user is not signed in. */}
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
           </Route>
 
           {/* Protected app routes */}
