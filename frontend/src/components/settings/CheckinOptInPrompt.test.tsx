@@ -21,7 +21,9 @@ const CURRENT = config(
   ],
   'Email me check-ins at 2 weeks, 3 months, 1 year, and 2 years.'
 )
-const settings = (on: boolean) => ({ emailNudgesEnabled: on, emailNudgesConsentAt: null, timezone: 'UTC', nudgeSendHour: 9, emailVerified: false })
+const settings = (on: boolean, dismissedAt: string | null = null) => ({
+  emailNudgesEnabled: on, emailNudgesConsentAt: null, timezone: 'UTC', nudgeSendHour: 9, emailVerified: false, nudgePromptDismissedAt: dismissedAt,
+})
 
 let view: Rendered | undefined
 beforeEach(() => {
@@ -66,6 +68,31 @@ describe('post-first-review opt-in prompt', () => {
     routes.set('GET /users/me/notification-settings', () => settings(true))
     view = render(<CheckinOptInPrompt />)
     await settle()
+    expect(view.container.querySelector('[data-testid="checkin-opt-in"]')).toBeNull()
+  })
+})
+
+describe('declining the prompt', () => {
+  it('is not shown to users who declined it before', async () => {
+    routes.set('GET /config', () => CURRENT)
+    routes.set('GET /users/me/notification-settings', () => settings(false, '2026-11-01T00:00:00.000Z'))
+    view = render(<CheckinOptInPrompt />)
+    await settle()
+    expect(view.container.querySelector('[data-testid="checkin-opt-in"]')).toBeNull()
+  })
+
+  it('"No thanks" persists the decline, hides the prompt, and does not change email settings', async () => {
+    routes.set('GET /config', () => CURRENT)
+    routes.set('GET /users/me/notification-settings', () => settings(false))
+    routes.set('POST /users/me/nudge-prompt/dismiss', () => settings(false, '2026-11-15T00:00:00.000Z'))
+    view = render(<CheckinOptInPrompt />)
+    await settle()
+
+    const no = [...view.container.querySelectorAll('button')].find((b) => /No thanks/.test(b.textContent ?? ''))
+    await click(no ?? null)
+    await settle()
+    expect(api.post).toHaveBeenCalledWith('/users/me/nudge-prompt/dismiss')
+    expect(api.put).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-testid="checkin-opt-in"]')).toBeNull()
   })
 })

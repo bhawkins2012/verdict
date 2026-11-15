@@ -6,6 +6,7 @@ import { useStageConfig } from '../../lib/stages'
 interface NotificationSettings {
   emailNudgesEnabled: boolean
   timezone: string
+  nudgePromptDismissedAt: string | null
 }
 
 const browserTimeZone = (): string | undefined => {
@@ -17,8 +18,9 @@ const browserTimeZone = (): string | undefined => {
 }
 
 /**
- * Shown after a user's first (INITIAL) review of a product, if they have not opted in to email
- * check-ins. Unchecked by default. The label is the consent copy from GET /api/config, generated from
+ * Shown after a user's first (INITIAL) review of each product until they opt in or decline ("No
+ * thanks", persisted server-side as nudgePromptDismissedAt; never shown again). Unchecked by default.
+ * The profile's Email reminders card stays the way to change the choice later. The label is the consent copy from GET /api/config, generated from
  * the nudge cadence on the server, so it cannot drift from what we actually send.
  */
 export function CheckinOptInPrompt() {
@@ -28,7 +30,7 @@ export function CheckinOptInPrompt() {
     queryKey: ['notification-settings'],
     queryFn: () => api.get('/users/me/notification-settings').then((r) => r.data),
   })
-  // Decided once, when the prompt first renders: users who already opted in never see it.
+  // Decided once, when the prompt first renders: users who already opted in or declined never see it.
   const [eligible, setEligible] = useState<boolean | null>(null)
   const [checked, setChecked] = useState(false)
   const update = useMutation({
@@ -41,10 +43,17 @@ export function CheckinOptInPrompt() {
     onSuccess: (data) => queryClient.setQueryData(['notification-settings'], data),
     onError: () => setChecked((c) => !c), // roll back the optimistic checkbox
   })
+  const dismiss = useMutation({
+    mutationFn: () => api.post('/users/me/nudge-prompt/dismiss').then((r) => r.data),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['notification-settings'], data)
+      setEligible(false)
+    },
+  })
 
   if (!config || !settings) return null
   if (eligible === null) {
-    setEligible(!settings.emailNudgesEnabled)
+    setEligible(!settings.emailNudgesEnabled && !settings.nudgePromptDismissedAt)
     return null
   }
   if (!eligible) return null
@@ -69,6 +78,17 @@ export function CheckinOptInPrompt() {
           </span>
         </span>
       </label>
+      {!checked && !update.isSuccess && (
+        <button
+          type="button"
+          className="text-xs text-ink-500 hover:text-ink-800 hover:underline mt-2 ml-7"
+          disabled={dismiss.isPending || update.isPending}
+          onClick={() => dismiss.mutate()}
+        >
+          No thanks, don&apos;t ask again
+        </button>
+      )}
+      {dismiss.isError && <p className="text-xs text-red-600 mt-2" role="alert">Could not save. Please try again.</p>}
       {checked && update.isSuccess && (
         <p className="text-xs text-ink-600 mt-2" role="status">Done. You can change this any time in your profile.</p>
       )}
