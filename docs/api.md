@@ -141,7 +141,7 @@ Submit a review (creates thread if first review for this product).
 }
 ```
 
-**Stages:** `INITIAL | ONE_WEEK | TWO_WEEKS | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | TWO_YEARS | CUSTOM` (chronological; `GET /config` returns the same list with labels). Only `TWO_WEEKS`, `THREE_MONTHS`, `ONE_YEAR` and `TWO_YEARS` are nudged; the others can be reviewed by hand.
+**Stages:** `INITIAL | ONE_WEEK | TWO_WEEKS | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | TWO_YEARS | CUSTOM` (chronological; `GET /config` returns the same list with labels). Only `TWO_WEEKS`, `THREE_MONTHS`, `ONE_YEAR` and `TWO_YEARS` are nudged; the others stay valid (existing reviews use them and this endpoint accepts them).
 
 - `purchasedAt` (optional, `YYYY-MM-DD`): when the user got the product; nudge due dates are anchored on it (else on the thread's first review). Accepted on any review (a thread can start at a later stage) and updates the thread; the UI offers it on the first review only. Future dates are rejected with 400 (judged against the most advanced time zone, UTC+14, so nobody's "today" is refused). There is no lower bound: a very old date makes all stages overdue, and the overdue collapse then asks for the single most relevant one. Stored as UTC midnight, so for users west of UTC a check-in can appear in-app a few hours before their local date; the email still goes at their local send hour.
 - In the same transaction as the review: the nudge for this stage becomes `COMPLETED`, earlier nudges are `CANCELLED` (superseded), and the next stage's nudge is planned.
@@ -155,7 +155,7 @@ Get all review threads for the current user (with latest review and next nudge).
 ---
 
 ### GET /reviews/thread/:productId *(auth)*
-Get full thread (all reviews + nudges) for a specific product.
+Get full thread (all reviews + pending nudges) for a specific product. Also returns `nextCheckIn`: `{ "stage": "TWO_WEEKS", "dueAt": "…" }` or `null`, the stage the nudge planner targets next (it follows skips and the overdue collapse; the thread page's next-review button uses it).
 
 ---
 

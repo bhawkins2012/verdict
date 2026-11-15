@@ -2,7 +2,7 @@
 
 > Reviews that evolve. Recommendations that know you.
 
-Verdict captures product and experience reviews over time — initial impression, 1 week, 1 month, 1 year — and uses demographic-aware statistical modeling to surface recommendations based on *how opinions shift*, not just snapshots.
+Verdict captures product and experience reviews over time — initial impression, then check-ins at 2 weeks, 3 months, 1 year and 2 years — and uses demographic-aware statistical modeling to surface recommendations based on *how opinions shift*, not just snapshots.
 
 ---
 
