@@ -6,12 +6,13 @@
 //
 // Delivery is inline and best-effort, once, after the HTTP response: a failure is logged and the
 // per-address slot is released so the user can press "Resend" (the soft gate means nobody is locked out).
-import { EmailRateKind } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
 import { loadNudgeConfig } from '../nudges/config'
 import { createProvider, EmailMessage, EmailProvider } from '../nudges/providers'
 import { releaseSlot } from './emailLimits'
+import { renderVerificationEmail } from './emails'
+import { IssuedToken, verificationLink } from './verificationTokens'
 
 let providerOverride: EmailProvider | null = null
 
@@ -65,4 +66,17 @@ export async function flushAccountEmails(): Promise<void> {
   while (inFlight.size > 0) await Promise.all([...inFlight])
 }
 
-export type AddressSlotKind = Extract<EmailRateKind, 'VERIFICATION_EMAIL' | 'SIGNUP_ATTEMPT_EMAIL'>
+export function accountEmailSettings() {
+  const c = loadNudgeConfig()
+  return { frontendUrl: c.frontendUrl, fromEmail: c.fromEmail, postalAddress: c.postalAddress }
+}
+
+/** The task that emails a verification link (run after the response). */
+export function verificationEmailTask(token: Pick<IssuedToken, 'id' | 'verifier'>, to: string, slotEventId: string | null) {
+  return () => {
+    const settings = accountEmailSettings()
+    const message = renderVerificationEmail({ to, link: verificationLink(settings.frontendUrl, token), tokenId: token.id }, settings)
+    return sendAccountEmail('verification', message, slotEventId ?? undefined)
+  }
+}
+

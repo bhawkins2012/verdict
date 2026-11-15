@@ -28,7 +28,7 @@ export class ConsoleProvider implements EmailProvider {
     const providerMessageId = `dry-run-${randomUUID()}`
     outbox.push({ ...message, providerMessageId, at: new Date().toISOString() })
     if (outbox.length > OUTBOX_LIMIT) outbox.shift()
-    logger.info('Nudge email (dry run, not sent)', {
+    logger.info('Email (dry run, not sent)', {
       to: message.to,
       subject: message.subject,
       idempotencyKey: message.idempotencyKey,

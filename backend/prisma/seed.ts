@@ -19,6 +19,7 @@ async function main() {
       passwordHash,
       displayName: 'Alice Chen',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_25_34,
@@ -42,6 +43,7 @@ async function main() {
       passwordHash,
       displayName: 'Bob Martinez',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_35_44,
@@ -65,6 +67,7 @@ async function main() {
       passwordHash,
       displayName: 'Carol Kim',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_45_54,

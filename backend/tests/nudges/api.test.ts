@@ -271,9 +271,11 @@ describe('development tools', () => {
     expect(res.body.nudge).toMatchObject({ status: 'SENT', channel: 'EMAIL' })
 
     const outbox = await api().get('/api/nudges/dev/outbox').set(bearer(u.accessToken))
-    expect(outbox.body).toHaveLength(1)
-    expect(outbox.body[0].text).toContain(`/products/`)
-    expect(outbox.body[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
+    // The outbox also holds the user's verification email from registration; count nudge emails only.
+    const nudgeEmails = outbox.body.filter((m: { idempotencyKey: string }) => m.idempotencyKey.startsWith('nudge/'))
+    expect(nudgeEmails).toHaveLength(1)
+    expect(nudgeEmails[0].text).toContain(`/products/`)
+    expect(nudgeEmails[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
   })
 
   it.each(['production', 'staging', 'prod', ''])('dev routes do not exist unless NODE_ENV is development or test (NODE_ENV=%j)', async (env) => {

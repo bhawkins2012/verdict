@@ -7,6 +7,15 @@ import { AppError } from '../middleware/errorHandler'
 import { dueNudgesWhere, syncThreadNudges } from '../nudges/lifecycle'
 import { enqueueAfterCommit } from '../nudges/runtime'
 import { isValidTimeZone } from '../nudges/time'
+import bcrypt from 'bcryptjs'
+import { Prisma } from '@prisma/client'
+import { loadNudgeConfig } from '../nudges/config'
+import { emailField, maskEmail } from '../auth/emailAddress'
+import { claimAddressSlot, releaseSlot, takeEmailChangeAttempt } from '../auth/emailLimits'
+import { renderEmailChangedEmail } from '../auth/emails'
+import { ipLimiter, tooManyRequests } from '../auth/ipLimits'
+import { afterResponse, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
+import { issueVerificationToken } from '../auth/verificationTokens'
 
 export const usersRouter = Router()
 
@@ -145,4 +154,59 @@ usersRouter.put('/me/notification-settings', authenticate, async (req: Request, 
 
   enqueueAfterCommit(enqueue)
   res.json(settings)
+})
+
+const emailChangeSchema = z.object({ email: emailField, currentPassword: z.string().min(1).max(200) }).strict()
+const emailChangeLimiter = ipLimiter()
+
+// PUT /api/users/me/email { email, currentPassword } (docs/adr-email-verification.md D7).
+// Needs the current password; at most 5 attempts per user per hour (right or wrong password). The new
+// address starts unverified: outstanding links are superseded, a link goes to the new address and a
+// notice to the old one. Email-reminder consent is kept (Q4); nudges stay in-app until verified.
+usersRouter.put('/me/email', authenticate, emailChangeLimiter, async (req: Request, res: Response) => {
+  const body = emailChangeSchema.safeParse(req.body)
+  if (!body.success) throw new AppError(400, body.error.errors[0].message)
+  const userId = req.userId!
+  const now = new Date()
+
+  const attempt = await takeEmailChangeAttempt(prisma, userId, now)
+  if (!attempt.allowed) return tooManyRequests(res, attempt.retryAfterSeconds, 'Too many email changes. Please try again later.')
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, passwordHash: true, emailVerified: true } })
+  if (!user) throw new AppError(404, 'User not found')
+  if (!(await bcrypt.compare(body.data.currentPassword, user.passwordHash))) throw new AppError(403, 'Current password is incorrect')
+
+  const email = body.data.email
+  if (email === user.email) return res.json({ email, emailVerified: user.emailVerified, changed: false })
+  // Q3: a plain 409 (exposure limited to a signed-in user who knows the account password, rate-limited).
+  if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) throw new AppError(409, 'That email address is already in use')
+
+  const slot = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', email, now)
+  if (!slot.allowed) {
+    return tooManyRequests(res, slot.retryAfterSeconds, 'We recently sent a link to that address. Please try again later.')
+  }
+  let token
+  try {
+    token = await prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { email, emailVerified: false, emailVerifiedAt: null } })
+      return issueVerificationToken(tx, userId, email, now) // also supersedes every older link
+    })
+  } catch (e) {
+    await releaseSlot(prisma, slot.eventId)
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new AppError(409, 'That email address is already in use')
+    throw e
+  }
+
+  res.json({ email, emailVerified: false, changed: true })
+  const oldEmail = user.email
+  const changeId = token.id
+  afterResponse(verificationEmailTask(token, email, slot.eventId))
+  afterResponse(() => {
+    const c = loadNudgeConfig()
+    const message = renderEmailChangedEmail(
+      { to: oldEmail, newAddressMasked: maskEmail(email), changeId },
+      { fromEmail: c.fromEmail, postalAddress: c.postalAddress }
+    )
+    return sendAccountEmail('email-changed', message)
+  })
 })
