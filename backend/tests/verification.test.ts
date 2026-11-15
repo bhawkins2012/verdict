@@ -171,6 +171,14 @@ describe('no account enumeration', () => {
     expect(notices).toHaveLength(1) // three attempts, one notice per address per hour
   })
 
+  it('register: a taken username is 409 whether or not the email is registered (checked first)', async () => {
+    const known = await newUser()
+    const withKnownEmail = await api().post('/api/auth/register').send({ ...uniqueUser(), email: known.email, username: known.username })
+    const withNewEmail = await api().post('/api/auth/register').send({ ...uniqueUser(), username: known.username })
+    expect(withKnownEmail.status).toBe(409)
+    expect(withKnownEmail.body).toEqual(withNewEmail.body)
+  })
+
   it('login: an unknown address and a wrong password give the same answer and both run bcrypt', async () => {
     const u = await newUser()
     const compare = jest.spyOn(bcrypt, 'compare')
@@ -218,6 +226,8 @@ describe('resend', () => {
     expect(second.body.error).toMatch(/recently sent a link/)
     expect(Number(second.headers['retry-after'])).toBeGreaterThan(3000)
     expect(emailsTo(u.email)).toHaveLength(1)
+    // A refused resend issues nothing: the link already in the inbox still works.
+    expect((await api().post('/api/auth/verify-email').send(linkFrom(emailsTo(u.email)[0]))).status).toBe(200)
   })
 
   it('works once the address slot is free; the new link supersedes the old one', async () => {
