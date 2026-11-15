@@ -6,6 +6,26 @@ Interactive docs: `http://localhost:3001/api/docs` (Swagger UI)
 
 ---
 
+## Config
+
+### GET /config *(no auth)*
+Stage order, labels and the nudge cadence: the single source the frontend derives its stage lists, next-stage prompt and email consent copy from. `Cache-Control: public, max-age=300`.
+
+```json
+{
+  "stages": [{ "stage": "INITIAL", "label": "first impression" }, { "stage": "ONE_WEEK", "label": "1 week" }, "…", { "stage": "CUSTOM", "label": "custom" }],
+  "nudgeCadence": [
+    { "stage": "TWO_WEEKS", "label": "2 weeks", "offset": { "days": 14 } },
+    { "stage": "THREE_MONTHS", "label": "3 months", "offset": { "months": 3 } },
+    { "stage": "ONE_YEAR", "label": "1 year", "offset": { "months": 12 } },
+    { "stage": "TWO_YEARS", "label": "2 years", "offset": { "months": 24 } }
+  ],
+  "consentCopy": "Email me check-ins at 2 weeks, 3 months, 1 year, and 2 years."
+}
+```
+
+Offsets are calendar offsets from the thread's purchase date (else its first review); month offsets clamp the day (Jan 31 + 3 months = Apr 30).
+
 ## Authentication
 
 All protected routes require a Bearer token:
@@ -121,7 +141,7 @@ Submit a review (creates thread if first review for this product).
 }
 ```
 
-**Stages:** `INITIAL | ONE_WEEK | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | TWO_YEARS | CUSTOM`
+**Stages:** `INITIAL | ONE_WEEK | TWO_WEEKS | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | TWO_YEARS | CUSTOM` (chronological; `GET /config` returns the same list with labels). Only `TWO_WEEKS`, `THREE_MONTHS`, `ONE_YEAR` and `TWO_YEARS` are nudged; the others can be reviewed by hand.
 
 - `purchasedAt` (optional, `YYYY-MM-DD`): when the user got the product; nudge due dates are anchored on it (else on the thread's first review). Accepted on any review (a thread can start at a later stage) and updates the thread; the UI offers it on the first review only. Future dates are rejected with 400 (judged against the most advanced time zone, UTC+14, so nobody's "today" is refused). There is no lower bound: a very old date makes all stages overdue, and the overdue collapse then asks for the single most relevant one. Stored as UTC midnight, so for users west of UTC a check-in can appear in-app a few hours before their local date; the email still goes at their local send hour.
 - In the same transaction as the review: the nudge for this stage becomes `COMPLETED`, earlier nudges are `CANCELLED` (superseded), and the next stage's nudge is planned.

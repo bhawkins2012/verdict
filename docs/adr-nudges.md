@@ -78,27 +78,28 @@ Postgres re-evaluates the `WHERE` under the row lock, so of two concurrent claim
 
 ### D3. Schedule anchoring
 
-`anchor = thread.purchasedAt ?? thread.startedAt`. A stage is due at a fixed calendar offset from the anchor, never from the previous review:
+`anchor = thread.purchasedAt ?? thread.startedAt`. A stage is due at a fixed calendar offset from the anchor, never from the previous review. **The cadence changed during the sprint (section 7)**; it is now:
 
 | Stage | Due at |
 |---|---|
-| `ONE_WEEK` | anchor + 7 days |
-| `ONE_MONTH` | anchor + 1 month |
+| `TWO_WEEKS` | anchor + 14 days |
 | `THREE_MONTHS` | anchor + 3 months |
-| `SIX_MONTHS` | anchor + 6 months |
-| `ONE_YEAR` | anchor + 1 year |
-| `TWO_YEARS` | anchor + 2 years |
+| `ONE_YEAR` | anchor + 12 months |
+| `TWO_YEARS` | anchor + 24 months |
 
-`INITIAL` is the first review, so it gets no nudge. `CUSTOM` is ad hoc, so it gets no nudge and doesn't affect planning. The old chained delays add up to almost the same offsets for a punctual user (7, 30, 90, 180, 363, 728 days), so on-time behavior barely changes.
+Month offsets clamp the day (Jan 31 + 3 months = Apr 30; Feb 29 + 1 year = Feb 28). The cadence is defined once, in `backend/src/stages.ts` (`NUDGE_CADENCE`), and served by `GET /api/config`.
+
+`INITIAL` is the first review, so it gets no nudge. `CUSTOM` is ad hoc, so it gets no nudge and doesn't affect planning. `ONE_WEEK`, `ONE_MONTH` and `SIX_MONTHS` are no longer nudged but stay valid stages users can review by hand; such a review closes the cadence stages before it (a hand-written 1-month review means the 2-week check-in is no longer asked).
 
 `purchasedAt` is optional and user-supplied (on the first review), because `startedAt` is "first review written", which is wrong when a user starts tracking a product they have owned for months.
 
 **Planner.** One pure function computes the single active nudge per thread from the anchor, the reviewed stages, existing nudge rows and `now`:
-- **Candidates:** scheduled stages later than the latest reviewed **or skipped** stage that have no review and no `SKIPPED` row. (A skip closes the earlier stages too: skipping 1 month must not bring back a superseded 1-week nudge.)
-- **Several stages already overdue** (due ≤ now): target only the **latest** overdue stage, the most relevant one, and mark earlier active nudges `CANCELLED` with reason `SUPERSEDED`. Example: a user wrote only `INITIAL` four months ago, so `ONE_WEEK`, `ONE_MONTH` and `THREE_MONTHS` are all overdue: one nudge, for `THREE_MONTHS`.
+- **Candidates:** cadence stages later (on the full stage timeline, `STAGE_ORDER`) than the latest reviewed **or skipped** stage that have no review and no `SKIPPED` row. (A skip closes the earlier stages too: skipping 3 months must not bring back a superseded 2-week nudge.)
+- **Several stages already overdue** (due ≤ now): target only the **latest** overdue stage, the most relevant one, and mark earlier active nudges `CANCELLED` with reason `SUPERSEDED`. Example: a user wrote only `INITIAL` four months ago, so `TWO_WEEKS` and `THREE_MONTHS` are both overdue: one nudge, for `THREE_MONTHS`.
 - **Nothing overdue:** target the earliest upcoming candidate.
-- **A late user** keeps the anchored schedule. A `ONE_MONTH` review written on day 50 still leaves `THREE_MONTHS` due on day 90, not day 110. A nudge stays relevant until the next stage becomes due, then is superseded (hourly sweep, D2 step 4).
-- **Minimum gap:** the target's send time is no earlier than **7 days after the user's latest review**, so we never ask again right after they answered.
+- **Out of cadence:** an active nudge for a stage that is not the planner's target, including a pre-existing row for a stage no longer in the cadence, is `CANCELLED` (`SUPERSEDED`) on the next planner pass (review, skip, or the hourly sweep).
+- **A late user** keeps the anchored schedule. A `TWO_WEEKS` review written on day 50 still leaves `THREE_MONTHS` due at anchor + 3 months. A nudge stays relevant until the next stage becomes due, then is superseded (hourly sweep, D2 step 4).
+- **Minimum gap:** the target's send time is no earlier than **7 days after the user's latest review**, so we never ask again right after they answered. With the first check-in at 14 days, an `INITIAL` review on day 0 never delays it (max(day 14, day 7) = day 14); a review written on day 10 moves it to day 17.
 - `sendAt` = the first time ≥ max(dueAt, latest review + 7 days, now) that falls on the user's preferred hour in their timezone (D5).
 
 The planner runs after a review is submitted (D4), after skip or snooze, from the hourly sweep, and once for every thread after the migration. It is idempotent: same inputs, same rows.
@@ -221,9 +222,9 @@ It will be verified on an empty database, on a seeded database, and on a databas
 |---|---|
 | Reconciler idempotency | Run it twice: same jobs, same rows; a missing job is re-created exactly once |
 | No double send, concurrent workers | Two `processNudge(id)` calls in parallel → provider called once |
-| Supersession | Review for `THREE_MONTHS` cancels a pending `ONE_MONTH` nudge |
+| Supersession | Review for `THREE_MONTHS` cancels a pending `TWO_WEEKS` nudge |
 | Completion on submit | Review for S marks S's nudge `COMPLETED`, in the same transaction |
-| Anchoring when late | `ONE_MONTH` reviewed on day 50 → `THREE_MONTHS` due day 90 |
+| Anchoring when late | `TWO_WEEKS` reviewed on day 50 → `THREE_MONTHS` due at anchor + 3 months |
 | Overdue collapse | Only `INITIAL` reviewed, 4 months ago → one nudge, `THREE_MONTHS` |
 | Unsubscribe token | Valid token unsubscribes; tampered token / wrong user / missing → 400, nothing changes; GET alone doesn't unsubscribe |
 | Opt-out respected | Opted-out user: no provider call, nudge still visible in-app |
@@ -262,8 +263,22 @@ Push and SMS (ADR-010 remains open for them), digest emails, an admin UI for dea
 | # | Decision |
 |---|---|
 | Q1 | Dry-run (`console`) provider is the default until a sending domain is chosen. |
-| Q2 | Email stays opt-out in the DB (`emailNudgesEnabled = false`). In addition, after a user's first `INITIAL` review of a product, show an **unchecked** opt-in toggle, with the time zone from `Intl.DateTimeFormat().resolvedOptions().timeZone`. **Open: the requested toggle text, "Email me check-ins at 1 week, 1 month, 1 year", lists 3 stages while the approved schedule (Q11) nudges at 6; not built until resolved.** |
+| Q2 | Email stays opt-out in the DB (`emailNudgesEnabled = false`). In addition, after a user's first `INITIAL` review of a product, show an **unchecked** opt-in toggle, with the time zone from `Intl.DateTimeFormat().resolvedOptions().timeZone`. The toggle text first requested listed 3 stages while the schedule nudged at 6; resolved by the cadence change in section 7. The copy is generated from the cadence: "Email me check-ins at 2 weeks, 3 months, 1 year, and 2 years." |
 | Q3 | **Changed:** `NUDGE_REQUIRE_VERIFIED_EMAIL` (default `true`) refuses real-provider sends to unverified addresses; those users get the check-in in-app only. Dry-run sends are unaffected. Because nothing verifies email yet (backlog #9), **production email stays effectively off until email verification ships.** |
 | Q4–Q7, Q11, Q12, Q14 | As recommended. |
 | Q8, Q9, Q10, Q13 | As proposed. The nav badge, dashboard banner and stats count all use the same due-only query (`dueNudgesWhere`). |
 | Extra | `UNSUBSCRIBE_SECRET` (dedicated, POST to confirm, `List-Unsubscribe` + `List-Unsubscribe-Post`); dedupe migration in its own commit; purchase date may not be in the future; claim and concurrency tests on real Postgres; Resend over `fetch` with an `AbortSignal` timeout, 429/5xx transient, other 4xx permanent, `Idempotency-Key` (unverified without a key); DST tests; footer with `NUDGE_POSTAL_ADDRESS` and legal review before real sending (backlog #4); at-least-once documented; Redis URL password fixed with a test. |
+
+## 7. Cadence change (decided during Sprint 1)
+
+**Decision.** The nudge cadence is **2 weeks, 3 months, 1 year, 2 years**, replacing 1 week, 1/3/6 months, 1/2 years.
+
+**Why.** The opt-in toggle (Q2) has to tell users exactly when we will email them. The first requested copy ("1 week, 1 month, 1 year") did not match the six-stage schedule, so either the copy or the schedule was wrong. The product decision was to change the schedule to four check-ins: fewer emails, a first check-in late enough that the user has used the product, and a cadence short enough to state honestly in one sentence.
+
+**What changed.**
+- Schema: `TWO_WEEKS` added to `ReviewStage` (migration `20261115000000_review_stage_two_weeks`, which only adds the value: Postgres cannot use a new enum value in the transaction that adds it). `ONE_WEEK`, `ONE_MONTH`, `THREE_MONTHS` and `SIX_MONTHS` stay: existing reviews remain valid and users can still write them by hand.
+- Single source of truth: `backend/src/stages.ts` defines `STAGE_ORDER` (every stage, chronological; used for drift and ordering), `STAGE_LABEL`, and `NUDGE_CADENCE` (ordered `{stage, offset}`), plus `consentCopy()` generated from the cadence. `GET /api/config` serves all of it. The frontend derives the consent copy, the thread page's next-stage call to action, the dashboard progress stages and stage ordering from that response; it has no cadence of its own.
+- The ML service is a separate Python process and keeps its own `STAGE_ORDER` and `STAGE_WEIGHTS` (`TWO_WEEKS` = 0.78, between `ONE_WEEK` and `ONE_MONTH`); a pytest test parses the Prisma enum and fails if they diverge.
+- Existing data: pending nudges for stages outside the cadence (e.g. a seeded `ONE_MONTH` nudge) are cancelled with reason `SUPERSEDED` on the next planner pass; the hourly sweep reaches every thread with an active nudge. Anchoring, overdue collapse, the 7-day gap and the daily cap are unchanged.
+
+*Alternatives considered:* (a) change only the copy to list all six stages (honest but long, and six emails per product); (b) keep six stages and email at only three of them (the in-app schedule and the email schedule would differ); (c) a copy that names no stages (users cannot tell what they agree to).
