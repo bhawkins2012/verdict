@@ -23,7 +23,7 @@ export interface EmailSettings {
   postalAddress: string
 }
 
-const escapeHtml = (s: string) =>
+export const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
 export function reviewLink(frontendUrl: string, input: Pick<NudgeEmailInput, 'productId' | 'stage' | 'nudgeId'>): string {

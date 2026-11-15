@@ -1,8 +1,9 @@
-import express, { Router, Request, Response, NextFunction } from 'express'
+import express, { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
+import { devOnly } from '../middleware/devOnly'
 import { loadNudgeConfig } from '../nudges/config'
 import { dueNudgesWhere, NudgeActionError, skipNudge, snoozeNudge } from '../nudges/lifecycle'
 import { dryRunOutbox } from '../nudges/providers'
@@ -97,13 +98,7 @@ nudgesRouter.post('/unsubscribe', express.urlencoded({ extended: false }), async
   page(res, 200, "You're unsubscribed", '<p>You will no longer get review reminder emails. You can turn them back on in your profile.</p>')
 })
 
-// ── Development only ──────────────────────────────────────────────────────────────────────────────
-// Allow-list, so staging, an unset NODE_ENV or a typo fail closed (these routes can re-send email and
-// ignore the daily cap).
-function devOnly(_req: Request, _res: Response, next: NextFunction) {
-  if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') throw new AppError(404, 'Not found')
-  next()
-}
+// ── Development only (devOnly: NODE_ENV allow-list, see middleware/devOnly.ts) ────────────────────────
 
 // POST /api/nudges/:id/send-now — make one of your nudges due now and run the real send path inline
 // (ignores the daily cap and the send hour). With the default dry-run provider nothing leaves the machine.

@@ -1,5 +1,6 @@
 // The reconciler (docs/adr-nudges.md D2). Runs at startup and every few minutes in every API instance.
 // Every step is idempotent and the send-claim prevents double sends, so concurrent runs are safe.
+import { pruneAccountEmailRecords } from '../auth/emailLimits'
 import { PrismaClient } from '@prisma/client'
 import { logger } from '../lib/logger'
 import { syncThreadNudges } from './lifecycle'
@@ -63,6 +64,9 @@ export async function reconcileOnce(deps: ReconcileDeps, opts: { sweep?: boolean
       }
       cursor = threads[threads.length - 1].id
     }
+    // Housekeeping for account emails (expired verification tokens, old rate-limit events) rides on the
+    // same hourly tick, so no second scheduler is needed (docs/adr-email-verification.md D9).
+    await pruneAccountEmailRecords(deps.db, now)
   }
 
   // 3. Every PENDING nudge due within the horizon must have a live job.
