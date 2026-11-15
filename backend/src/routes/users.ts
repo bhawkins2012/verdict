@@ -80,6 +80,7 @@ const notificationSettingsSelect = {
   nudgeSendHour: true,
   emailVerified: true,
   nudgePromptDismissedAt: true,
+  emailNudgesFirstEnabledAt: true,
 } as const
 
 const notificationSettingsSchema = z
@@ -124,10 +125,12 @@ usersRouter.put('/me/notification-settings', authenticate, async (req: Request, 
       emailNudgesEnabled === undefined || emailNudgesEnabled === current.emailNudgesEnabled
         ? {}
         : { emailNudgesConsentAt: emailNudgesEnabled ? now : null }
+    // The first opt-in is recorded once and never cleared (the opt-in prompt is never shown again).
+    const firstEnabled = emailNudgesEnabled && !current.emailNudgesFirstEnabledAt ? { emailNudgesFirstEnabledAt: now } : {}
 
     const settings = await tx.user.update({
       where: { id: userId },
-      data: { emailNudgesEnabled, timezone, nudgeSendHour, ...consent },
+      data: { emailNudgesEnabled, timezone, nudgeSendHour, ...consent, ...firstEnabled },
       select: notificationSettingsSelect,
     })
 
