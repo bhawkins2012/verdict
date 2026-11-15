@@ -13,7 +13,7 @@ export function useStageConfig() {
   return useQuery<StageConfig>({
     queryKey: ['stage-config'],
     queryFn: () => api.get('/config').then((r) => r.data),
-    staleTime: Infinity,
+    staleTime: 5 * 60_000, // matches the response's Cache-Control max-age
   })
 }
 
@@ -25,16 +25,6 @@ export function stageRank(config: StageConfig, stage: ReviewStage): number {
 
 export function sortByStage<T extends { stage: ReviewStage }>(config: StageConfig, items: readonly T[]): T[] {
   return [...items].sort((a, b) => stageRank(config, a.stage) - stageRank(config, b.stage))
-}
-
-/**
- * The next check-in to suggest: the first cadence stage after everything the user has reviewed.
- * Mirrors the backend planner: a reviewed stage closes every earlier point on the timeline.
- */
-export function nextCheckInStage(config: StageConfig, completed: readonly ReviewStage[]): ReviewStage | null {
-  const closed = Math.max(-1, ...completed.filter((s) => s !== 'CUSTOM').map((s) => stageRank(config, s)))
-  const next = config.nudgeCadence.find((c) => stageRank(config, c.stage) > closed && !completed.includes(c.stage))
-  return next ? next.stage : null
 }
 
 /** Stages shown on a thread's progress bar: the first impression, then each check-in. */

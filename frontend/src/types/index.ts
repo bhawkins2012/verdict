@@ -56,6 +56,8 @@ export interface ReviewThread {
   reviews: Review[]
   nudges?: Nudge[]
   _count?: { reviews: number }
+  /** GET /reviews/thread/:productId only: the backend planner's next check-in (null when there is none). */
+  nextCheckIn?: { stage: ReviewStage; dueAt: string } | null
 }
 
 export interface Product {
