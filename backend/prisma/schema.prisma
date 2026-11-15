@@ -380,6 +380,9 @@ model EmailRateEvent {
   kind      EmailRateKind
   key       String
   createdAt DateTime      @default(now())
+  /// When the provider accepted the email. Address slots whose email was never sent (the process died
+  /// before sending) stop counting after a few minutes, so a crash cannot block resend for an hour.
+  sentAt    DateTime?
 
   @@index([kind, key, createdAt])
   @@map("email_rate_events")
