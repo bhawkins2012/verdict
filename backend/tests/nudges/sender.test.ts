@@ -53,6 +53,18 @@ describe('processNudge: the send-claim', () => {
     expect(send).not.toHaveBeenCalled()
     expect(await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).toMatchObject({ status: 'COMPLETED', endedReason: 'REVIEW_SUBMITTED' })
   })
+
+  it('never sends a stage outside the cadence (a job queued before the cadence changed), even before the sweep', async () => {
+    const user = await makeUser()
+    const nudge = await dueNudge(user)
+    // A legacy ONE_MONTH row whose BullMQ job fires before the planner sweep has cancelled it.
+    await prisma.nudge.update({ where: { id: nudge.id }, data: { targetStage: 'ONE_MONTH' } })
+    const { provider, send } = mockProvider()
+
+    expect((await processNudge(nudge.id, senderDeps(provider, NOW))).kind).toBe('superseded')
+    expect(send).not.toHaveBeenCalled()
+    expect(await prisma.nudge.findUniqueOrThrow({ where: { id: nudge.id } })).toMatchObject({ status: 'CANCELLED', endedReason: 'SUPERSEDED' })
+  })
 })
 
 describe('processNudge: consent and verification', () => {

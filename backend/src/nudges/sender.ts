@@ -11,6 +11,7 @@ import { NudgeConfig } from './config'
 import { renderNudgeEmail } from './email'
 import { EmailProvider, EmailProviderError } from './providers'
 import { localDayBounds, nextLocalSendTime } from './time'
+import { NUDGE_CADENCE } from '../stages'
 
 /** A claim older than this belongs to a dead worker; the reconciler returns it to PENDING. */
 export const STALE_CLAIM_MS = 10 * 60 * 1000
@@ -22,6 +23,7 @@ export type ProcessOutcome =
   | { kind: 'missing' }
   | { kind: 'not-claimed' }
   | { kind: 'completed' }
+  | { kind: 'superseded' }
   | { kind: 'in-app'; reason: 'opted-out' | 'unverified-email' }
   | { kind: 'deferred'; sendAt: Date }
   | { kind: 'sent'; providerMessageId: string }
@@ -76,6 +78,16 @@ export async function processNudge(nudgeId: string, deps: SenderDeps, opts: { ig
         data: { status: 'COMPLETED', completedAt: now, endedReason: 'REVIEW_SUBMITTED', claimedAt: null },
       })
       return { kind: 'completed' }
+    }
+
+    // A stage that is no longer in the cadence (e.g. a ONE_MONTH job queued before the cadence changed)
+    // is never sent, even if the planner sweep has not reached its thread yet.
+    if (!NUDGE_CADENCE.some((c) => c.stage === nudge.targetStage)) {
+      await tx.nudge.update({
+        where: { id: nudgeId },
+        data: { status: 'CANCELLED', endedReason: 'SUPERSEDED', claimedAt: null },
+      })
+      return { kind: 'superseded' }
     }
 
     // Email only with consent, and (for a real provider) only to verified addresses unless disabled.
