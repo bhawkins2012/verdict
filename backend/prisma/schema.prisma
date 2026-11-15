@@ -28,12 +28,15 @@ model User {
   emailVerified Boolean  @default(false)
 
   // Nudge preferences (docs/adr-nudges.md D5). Email is opt-in: off until the user turns it on.
-  emailNudgesEnabled     Boolean   @default(false)
-  emailNudgesConsentAt   DateTime?
-  timezone               String    @default("UTC") // IANA name, e.g. "Europe/Berlin"
-  nudgeSendHour          Int       @default(9) // 0-23, local to `timezone`
+  emailNudgesEnabled        Boolean   @default(false)
+  emailNudgesConsentAt      DateTime?
+  timezone                  String    @default("UTC") // IANA name, e.g. "Europe/Berlin"
+  nudgeSendHour             Int       @default(9) // 0-23, local to `timezone`
   // The user declined the post-first-review email prompt; it is never shown again (profile settings still work).
-  nudgePromptDismissedAt DateTime?
+  nudgePromptDismissedAt    DateTime?
+  // First time the user turned email reminders on (any path); never cleared, so an opt-out (profile or
+  // unsubscribe link) does not bring the opt-in prompt back.
+  emailNudgesFirstEnabledAt DateTime?
 
   demographics  UserDemographics?
   reviewThreads ReviewThread[]
