@@ -2,7 +2,7 @@
 // syncThreadNudges() makes a thread's nudge rows match the planner, and is safe to run any number of
 // times (on review submit, skip, snooze, and from the reconciler's sweep).
 import { NudgeStatus, Prisma, ReviewStage } from '@prisma/client'
-import { planThreadNudge } from './planner'
+import { planInputFromRows, planThreadNudge } from './planner'
 import { nextLocalSendTime } from './time'
 
 type Db = Prisma.TransactionClient
@@ -46,17 +46,9 @@ export async function syncThreadNudges(db: Db, threadId: string, now: Date, opts
   if (!thread) return []
 
   const reviewed = new Set<ReviewStage>(thread.reviews.map((r) => r.stage))
-  const latestReviewAt = thread.reviews.reduce<Date | null>(
-    (latest, r) => (!latest || r.capturedAt > latest ? r.capturedAt : latest),
-    null
+  const plan = planThreadNudge(
+    planInputFromRows({ anchor: thread.purchasedAt ?? thread.startedAt, reviews: thread.reviews, nudges: thread.nudges, now })
   )
-  const plan = planThreadNudge({
-    anchor: thread.purchasedAt ?? thread.startedAt,
-    reviewedStages: [...reviewed],
-    latestReviewAt,
-    skippedStages: thread.nudges.filter((n) => n.status === 'SKIPPED').map((n) => n.targetStage),
-    now,
-  })
 
   // Close out active nudges that are no longer the target.
   for (const n of thread.nudges) {

@@ -89,6 +89,13 @@ describe('nudge planner', () => {
     expect(plan({ reviewedStages: ['INITIAL', 'ONE_WEEK'] })?.stage).toBe('TWO_WEEKS')
   })
 
+  it('a delivered nudge for a stage outside the cadence closes the check-ins before it', () => {
+    // Emailed about 1 month under the old cadence: no 2-week check-in afterwards.
+    expect(plan({ askedStages: ['ONE_MONTH'], now: new Date('2026-02-20T00:00:00Z') })?.stage).toBe('THREE_MONTHS')
+    // A delivered cadence-stage nudge is still the target until it is reviewed or superseded.
+    expect(plan({ askedStages: ['TWO_WEEKS'] })?.stage).toBe('TWO_WEEKS')
+  })
+
   it('only cadence stages are ever targeted', () => {
     const targets = new Set<string>()
     for (let day = 0; day <= 800; day += 5) {

@@ -41,7 +41,31 @@ export interface PlanInput {
   latestReviewAt: Date | null
   /** Stages whose nudge the user skipped; they are never targeted again. */
   skippedStages: readonly ReviewStage[]
+  /**
+   * Stages outside the cadence the user was already asked about (a nudge from an earlier cadence was
+   * delivered). They close the earlier cadence stages, so after the cadence change nobody who got a
+   * "1 month" check-in is then asked about 2 weeks. Optional; cadence stages here are ignored.
+   */
+  askedStages?: readonly ReviewStage[]
   now: Date
+}
+
+/** Build the planner input from a thread's rows. The one place that decides what counts as reviewed, skipped or asked. */
+export function planInputFromRows(rows: {
+  anchor: Date
+  reviews: readonly { stage: ReviewStage; capturedAt: Date }[]
+  nudges: readonly { targetStage: ReviewStage; status: string; sentAt: Date | null }[]
+  now: Date
+}): PlanInput {
+  return {
+    anchor: rows.anchor,
+    reviewedStages: [...new Set(rows.reviews.map((r) => r.stage))],
+    latestReviewAt: rows.reviews.reduce<Date | null>((l, r) => (!l || r.capturedAt > l ? r.capturedAt : l), null),
+    skippedStages: rows.nudges.filter((n) => n.status === 'SKIPPED').map((n) => n.targetStage),
+    // Delivered nudges (email or in-app); the planner only counts those outside the cadence.
+    askedStages: rows.nudges.filter((n) => n.sentAt !== null).map((n) => n.targetStage),
+    now: rows.now,
+  }
 }
 
 export interface PlanTarget {
@@ -64,7 +88,8 @@ export function planThreadNudge(input: PlanInput, cadence: readonly CadenceEntry
   // A reviewed or skipped stage closes itself and every earlier point on the timeline, whether or not it
   // is a cadence stage: a 1-month review written by hand means a 2-week check-in no longer makes sense,
   // and skipping 3 months must not bring back a 2-week nudge it had superseded.
-  const lastClosedRank = Math.max(-1, ...[...reviewed, ...skipped].map(stageRank))
+  const asked = (input.askedStages ?? []).filter((s) => !cadence.some((c) => c.stage === s))
+  const lastClosedRank = Math.max(-1, ...[...reviewed, ...skipped, ...asked].map(stageRank))
 
   const candidates = cadence
     .filter((c) => stageRank(c.stage) > lastClosedRank && !reviewed.has(c.stage) && !skipped.has(c.stage))

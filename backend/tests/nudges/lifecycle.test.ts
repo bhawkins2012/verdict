@@ -252,4 +252,19 @@ describe('syncThreadNudges', () => {
       TWO_WEEKS: ['PENDING', null],
     })
   })
+
+  it('cadence change: a user already emailed about 1 month is not then asked about 2 weeks', async () => {
+    const user = await makeUser()
+    const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const day30 = new Date(start.getTime() + 30 * 86_400_000)
+    await prisma.nudge.create({
+      data: { userId: user.id, threadId: thread.id, targetStage: 'ONE_MONTH', status: 'SENT', channel: 'EMAIL', sentAt: day30, scheduledFor: day30, sendAt: day30 },
+    })
+
+    await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, new Date(start.getTime() + 40 * 86_400_000)))
+
+    const rows = await prisma.nudge.findMany({ where: { threadId: thread.id } })
+    const byStage = Object.fromEntries(rows.map((n) => [n.targetStage, n.status]))
+    expect(byStage).toEqual({ ONE_MONTH: 'CANCELLED', THREE_MONTHS: 'PENDING' })
+  })
 })
