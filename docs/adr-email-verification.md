@@ -1,7 +1,6 @@
 # ADR: Email verification
 
-**Status:** proposed (Sprint 2, backlog #9)
-**Context owner:** product owner decides the open questions in section 4.
+**Status:** accepted with changes (Sprint 2, backlog #9). The decisions and the four requested changes are recorded in section 6; the decision sections below already reflect them.
 
 ## 1. Context
 
@@ -56,19 +55,18 @@ What exists today and matters here:
 
 ### D3. Register without enumeration
 
-- **New contract.** `POST /api/auth/register` returns **202 `{ "message": "Check your email to verify your address." }`** for both a new address and an already-registered one. Validation errors stay 400. A taken **username** stays 409 (usernames are public profile handles, not secret).
+- **New contract.** `POST /api/auth/register` returns **202 `{ "message": "Check your email, then sign in." }`** for both a new address and an already-registered one. Validation errors stay 400. A taken **username** stays 409 (usernames are public profile handles, not secret).
 - **Order of checks matters.** The username is checked first and returns 409 regardless of the email. Otherwise a taken username sent with a known address could give a different answer than with an unknown one.
 - **New address.** Create the user (unverified), issue a token and send the verification email.
-- **Known address.** Create nothing and change nothing. Run the same bcrypt hash so timing does not differ. Send the address's owner a short "Someone tried to create a Verdict account with this address. If it was you, log in or reset your password" email (the reset flow does not exist yet; the copy says "log in"). This is limited to 1 such email per address per hour.
-- **Logging in after register.** The frontend calls `POST /api/auth/login` with the same credentials right after the 202.
-  - A new user is logged in with no extra step (the soft gate, D8).
-  - Someone registering a known address with a different password gets the generic 401 from login, and the page says "Check your email". That reveals nothing: a wrong password for an unknown address looks the same.
+- **Known address.** Create nothing and change nothing. Hash the password anyway, so both paths do the same work. Send the address's owner a short "Someone tried to create a Verdict account with this address. If it was you, just sign in" email, at most once per address per hour (D4).
+- **No sign-in after register (change 1).** The response carries no tokens and the frontend makes no login call. For every address it shows the same "Check your email, then sign in." screen; the user signs in (which works before verifying, D8). A test asserts identical status, body and headers for a known and an unknown address, that the password is hashed on both paths, and that median timing is within a factor of 2.
 - **Login timing.** Login runs bcrypt against a fixed dummy hash when the email is unknown, so its timing no longer reveals unknown addresses.
 - **Email sends happen after the response** (D5) in both register paths, so the provider's latency does not reveal which path ran.
 
 *Alternatives considered:*
 - Keep the 409. It is simple, but it is the enumeration the requirement rules out.
 - Return 201 with tokens for new accounts and a fake success for known ones. The response shapes differ, so it still enumerates.
+- 202 and then an automatic client-side login (the first version of this ADR). Rejected in review: one less step for new users, but the screens after register would differ (signed in vs "check your email") for a known address with another password.
 - Verify-before-login (a hard gate). It contradicts D8 and loses users who mistype their address.
 
 ### D4. Abuse controls
@@ -78,8 +76,10 @@ What exists today and matters here:
 | Resend cooldown, per user | 60 s since the last token issued | DB: newest `email_verification_tokens.createdAt` for the user | Holds across processes and restarts. The in-memory limiter does not. |
 | Resend cap, per user | 5 tokens per rolling hour | DB: count of the user's tokens in the last hour | Same. Also caps register-triggered tokens. |
 | Per-IP limit on `register`, `resend`, `verify-email` and `email` change | 10 per 15 min per IP for each route group (`VERIFY_RATE_LIMIT_MAX`) | `express-rate-limit`, keyed by `req.ip` (so `TRUST_PROXY` decides the client IP), mounted on those routes in addition to the global `/api` limiter | Reuses the existing mechanism and the trust-proxy decision. It is in-memory and per process, as the global limiter already is; documented. |
-| "Someone tried to register" notice | 1 per address per hour | DB: a timestamp on the user (`registerNoticeSentAt`) | Prevents using register to spam a known address. |
+| Per target address (change 3): verification emails, and "someone tried to sign up" emails | 1 of each kind per address per hour | DB: `email_rate_events`, keyed by sha256 of the normalized address, under an advisory lock | Works when no user owns the address (email change to a new address); stops register, resend and email change from being used to flood an inbox. Claimed **before** a token is issued, so a refused resend leaves the current link valid; released if the provider rejects the email. |
+| Email-change attempts (change 3) | 5 per user per hour, right or wrong password | DB: `email_rate_events` keyed by user id | Limits password guessing and address probing through the change form. |
 
+- **Interaction.** With one verification email per address per hour, the 60 s cooldown and the 5-per-hour cap only bind across different addresses (email changes); for one address the hourly limit is reached first. The resend button therefore works at most once an hour per address, or at once again if the previous send failed.
 - **Responses.** Limits return **429** with `Retry-After`. The 429 for the per-user cooldown is only on the authenticated resend, which reveals nothing about other accounts. On **register**, the per-IP 429 is the only rate response, and it does not depend on whether the address exists. The per-address notice limit just skips the email silently, so the response stays the same 202.
 - **No response reveals whether an address is registered.** That covers register (D3), login (identical 401, constant work), resend (authenticated: it acts on the caller's own address only, and the body takes no address) and email change (D7, open question Q3).
 
@@ -89,13 +89,14 @@ What exists today and matters here:
 
 ### D5. Delivery: inline, best-effort, after the response; the resend button is the retry
 
+- **Transactional (change 2).** Verification, "someone tried to sign up" and "email changed" emails ignore the nudge rules: the email-reminder opt-in, the nudge daily cap and `NUDGE_REQUIRE_VERIFIED_EMAIL` (a verification email goes to an unverified address by definition). Only the per-address limit (D4) applies. A test with a real provider, an opted-out unverified user and `NUDGE_REQUIRE_VERIFIED_EMAIL=true` fails if any of those gates is applied.
 - **Sending.** Verification emails go through the existing `EmailProvider`: dry-run by default, Resend when configured. The message is built by a new `renderVerificationEmail` and carries `Idempotency-Key: verify/<tokenId>`.
 - **When.** Each email is sent **once, after the HTTP response, after the transaction that created the token commits**. A failure is logged with the token id and the provider error, and is not retried automatically.
 - **Recommendation: this simple option, not the nudge retry engine.**
   - **It cannot lose a user.** The soft gate (D8) means a failed send never locks anyone out: they are logged in, see the banner, and can press "Resend" once the provider recovers. The token row exists either way.
   - **The user is present.** The nudge engine exists because nudges are scheduled weeks ahead for users who are not online. Verification happens while the user is in the app, so a human-driven retry is enough. Background retries could deliver a stale email minutes later, after the user has already requested a newer one, and that stale link would be superseded and fail.
   - **Less to get right.** Reusing the nudge engine would mean a new job type, claim states and reconciler paths for a message with a 24 h life.
-- **Health signal.** The banner reads "We sent a link to a\*\*\*@example.com. Didn't get it? Resend". It does not claim delivery. `GET /api/auth/me` exposes `emailVerificationSentAt` (the newest token's `createdAt`) so the banner can say when.
+- **Health signal.** The banner reads "Please confirm jane@example.com … We sent a link 5 minutes ago. Resend email · Change address". It shows the full address (it is the user's own, and seeing it is how a typo gets noticed) and does not claim delivery. `GET /api/auth/me` exposes `emailVerificationSentAt` (the newest token's `createdAt`) so the banner can say when.
 
 *Alternatives considered:*
 - Queue on BullMQ with retries. It gets automatic recovery from a short provider outage, but adds a Redis dependency to registration and the stale-link race above.
@@ -126,7 +127,7 @@ What exists today and matters here:
 ### D8. Gating: soft
 
 - **Before verification, everything works:** login, reviews, the whole app.
-- **The banner.** Unverified users see it on every page: "Please verify a\*\*\*@example.com. [Resend email]". It shows status, cooldown and error. It is gone once verified.
+- **The banner.** Unverified users see it on every page: "Please confirm jane@example.com to get check-ins by email. We sent a link … [Resend email] [Change address]". It shows the result or the 429 message with when to retry. It is gone once verified.
 - **Only real-provider nudge emails require verification.** That is the existing `NUDGE_REQUIRE_VERIFIED_EMAIL` check, unchanged. Dry-run sends and in-app check-ins never do.
 - **Seed users stay verified.** The seed already sets `emailVerified: true`; it also sets `emailVerifiedAt`.
 - **Existing non-seed users stay unverified** (no backfill). They see the banner and can verify; nothing else changes for them.
@@ -139,7 +140,6 @@ The migration has its own commit and is applied with `prisma migrate deploy` onl
 model User {
   // existing emailVerified Boolean stays the gate
   emailVerifiedAt      DateTime?
-  registerNoticeSentAt DateTime?   // D4: "someone tried to register" notice limit
   verificationTokens   EmailVerificationToken[]
 }
 
@@ -157,9 +157,22 @@ model EmailVerificationToken {
   @@index([userId, createdAt])
   @@map("email_verification_tokens")
 }
+
+enum EmailRateKind { VERIFICATION_EMAIL  SIGNUP_ATTEMPT_EMAIL  EMAIL_CHANGE_ATTEMPT }
+
+model EmailRateEvent {      // database-backed limits (D4)
+  id        String        @id @default(cuid())
+  kind      EmailRateKind
+  key       String        // sha256 of the normalized address, or the user id
+  createdAt DateTime      @default(now())
+  @@index([kind, key, createdAt])
+  @@map("email_rate_events")
+}
 ```
 
-- **Additive only:** a new table, two nullable columns, no backfill. Existing data is untouched, and the seed sets `emailVerifiedAt` for its verified users.
+**Normalization migration (change 4, its own commit, before the one above).** It aborts, changing nothing, if existing rows would collide once trimmed and lower-cased, and lists every offending address (`alice@example.com -> ['Alice@Example.com', 'alice@example.com']; …`); the operator merges or renames those accounts, runs `prisma migrate resolve --rolled-back 20261116000000_user_email_normalized`, and deploys again. Otherwise it normalizes existing rows and adds `CHECK (email = lower(btrim(email)))` and a unique index on `lower(email)`. Prisma cannot express either, and `prisma migrate diff` ignores both (checked: no drift).
+
+- **Additive only:** two new tables and one nullable column; users already verified (the seed) get `emailVerifiedAt` backfilled. Existing data is untouched, and the seed sets `emailVerifiedAt` for its verified users.
 - **Retention.** Token rows older than 30 days are deleted by a small cleanup query on the reconciler's existing hourly sweep tick, so no new scheduler is needed.
 - **Verification before merge:** `migrate deploy` on the seeded dev database and on an empty database, and `prisma migrate diff` empty (CI checks this too).
 
@@ -183,7 +196,7 @@ model EmailVerificationToken {
 - prints the provider's response (message id, or the error with status);
 - **refuses to run with the dry-run provider** (exit code 1 and a message).
 
-It uses no database and creates no token, and the link in it points to a page that says "This was a test email". **Real delivery stays unverified until you run it with a real Resend key.**
+It uses no database and creates no token; the message says it is a delivery test with nothing to confirm, and its link opens the home page. **Real delivery stays unverified until you run it with a real Resend key.**
 
 ## 3. Testing plan (Step 3)
 
@@ -205,7 +218,7 @@ All on real Postgres, with the provider mocked:
 | Q3 | Email change to an address that already belongs to another account. A plain 409 reveals that the address is registered, but only to someone logged in who knows the account password, and it is rate-limited. The alternative is a "pending email" flow: always answer 200 "check the new address", and only switch when the link is confirmed (if the address is taken, the new address gets a "someone tried to use this address" notice instead). | **409 now** (narrow exposure, simple, matches the requested "change resets verification" behaviour); the pending-email flow can go in backlog #8 |
 | Q4 | Keep email-reminder consent across an email change? | **Keep** (consent is to Verdict emailing *the account*; nudges stay in-app until the new address is verified) |
 | Q5 | From address and env var names. Verification reuses `NUDGE_EMAIL_PROVIDER` / `NUDGE_FROM_EMAIL` / `NUDGE_POSTAL_ADDRESS` / `RESEND_API_KEY`. | **Reuse as-is this sprint**; renaming to `EMAIL_*` with fallbacks is a separate small change |
-| Q6 | Lower-case and trim email addresses (today `Alice@x` and `alice@x` can be two accounts)? Changing it touches login lookups and could collide with existing mixed-case rows. | **Defer** to the backlog with a collision check; this sprint does not change normalisation |
+| Q6 | Lower-case and trim email addresses (today `Alice@x` and `alice@x` can be two accounts)? Changing it touches login lookups and could collide with existing mixed-case rows. | **Defer** to the backlog with a collision check (overruled: normalize now, see section 6) |
 | Q7 | Token lifetime | **24 h** (as specified) |
 | Q8 | Re-verification after a password change, or periodic re-verification? | **No** |
 
@@ -217,3 +230,19 @@ All on real Postgres, with the provider mocked:
 - CAPTCHA.
 - An unauthenticated "resend by address" endpoint. Not needed with the soft gate, since users can always log in, and it would be both an enumeration and a spam vector.
 - The full settings page (backlog #8). The email-change form goes on the existing profile page.
+
+## 6. Decisions recorded (approval of this ADR)
+
+| # | Decision |
+|---|---|
+| Q1 | Yes, with change 1: register returns the same 202 for known and unknown addresses and **does not sign in**; the frontend shows the same "Check your email, then sign in" screen for both and makes no login call. The password is hashed on both paths. |
+| Q2 | Defaults (60 s cooldown, 5 per hour per user, 10 per 15 min per IP per route group) plus change 3. |
+| Q3 | 409 now; the pending-email-change flow goes to the backlog. |
+| Q4 | Keep consent across an email change. |
+| Q5 | Reuse the `NUDGE_*` provider config; renaming to `EMAIL_*` goes to the backlog. |
+| Q6 | **Normalize now** (change 4): trim and lower-case on every write and lookup (register, login, email change, verification), a unique index on `lower(email)` in its own migration commit that fails loudly on collisions. |
+| Q7 | 24 h. |
+| Q8 | No. |
+| Change 2 | Verification and "someone tried to sign up" emails are transactional: they ignore the email-reminder opt-in, the nudge daily cap and `NUDGE_REQUIRE_VERIFIED_EMAIL` (D5). |
+| Change 3 | At most one of each of those emails per target address per hour, keyed by a hash of the address so it works with no user; email-change attempts limited to 5 per hour per user (D4). |
+| Backlog | Pending email change, `EMAIL_*` rename, and the four reviewer findings deferred in Step 0 (one test that cannot fail, no failed-decline test, duplicated error message, the prompt never shown for a product whose first review is at a later stage). |

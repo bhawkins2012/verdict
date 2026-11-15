@@ -6,7 +6,7 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 
 **Done in Sprint 1 (PR #5):** email check-in nudges (delivery, Redis resilience, new 2 weeks / 3 months / 1 year / 2 years cadence, opt-in prompt with persisted decline). Part of #8 shipped with it: the profile now has the email-reminder controls (opt-in, time zone, send hour). The "real nudge email needs legal review" part of #4 is still open.
 
-**In progress:** #9 Email verification (Sprint 2, branch `sprint-2-email-verification`).
+**In progress:** #9 Email verification (Sprint 2, branch `sprint-2-email-verification`): built; real delivery unverified until the `email:smoke` run with a real Resend key. Added from Sprint 2 decisions: #12–#14.
 
 ## Priority order
 
@@ -23,6 +23,9 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 | 8 | 6 | [Product page and review-thread UI polish](#6-product-page-and-review-thread-ui-polish) | M | |
 | 9 | 5 | [Preview deployment per PR](#5-preview-deployment-per-pr) | M | Blocked on a host decision |
 | 10 | 3 | [Recommender evaluation: data and metrics strategy](#3-recommender-evaluation-data-and-metrics-strategy) | L | Design first; low urgency at current data volume |
+| 11 | 12 | [Pending email change (confirm before switching)](#12-pending-email-change-confirm-before-switching) | M | Removes the remaining enumeration (409) in email change; fits with #8 |
+| 12 | 13 | [Rename the email provider settings to `EMAIL_*`](#13-rename-the-email-provider-settings-to-email_) | S | Naming only; account emails now share the nudge settings |
+| 13 | 14 | [Opt-in prompt follow-ups from the Sprint 2 review](#14-opt-in-prompt-follow-ups-from-the-sprint-2-review) | S | Small; one is a real gap (prompt never shown for a later-stage first review) |
 
 ---
 
@@ -162,6 +165,39 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 - An admin-only endpoint (and minimal page or CLI) listing `FAILED` nudges with `lastError`, attempts and user, newest first; a retry action that returns one to `PENDING` with attempts reset.
 - Admin authorization defined first (there is no admin role yet): a decision recorded in an ADR.
 - Tests for authorization and retry.
+
+---
+
+## 12. Pending email change (confirm before switching)
+**Size:** M (added in Sprint 2, decision Q3)
+
+**Problem.** `PUT /api/users/me/email` changes the address at once and answers 409 when the new address belongs to another account. That reveals that the address is registered, though only to a signed-in user who knows their password, at most 5 times an hour.
+
+**Acceptance criteria**
+- The new address is stored as pending; the account keeps its current, verified address until the link sent to the new one is confirmed.
+- The response is the same whether or not the new address is taken; a taken address gets a "someone tried to use this address" notice instead of a link.
+- The old address is notified when the change completes; pending changes expire with the link (24 h).
+
+---
+
+## 13. Rename the email provider settings to `EMAIL_*`
+**Size:** S (added in Sprint 2, decision Q5)
+
+**Problem.** Account emails (verification, notices) use the nudge settings `NUDGE_EMAIL_PROVIDER`, `NUDGE_FROM_EMAIL`, `NUDGE_POSTAL_ADDRESS` and `RESEND_API_KEY`; the names suggest they only affect nudges.
+
+**Acceptance criteria**
+- `EMAIL_PROVIDER`, `EMAIL_FROM`, `EMAIL_POSTAL_ADDRESS` (and `RESEND_API_KEY`), with the `NUDGE_*` names still read as fallbacks for one release and a startup warning when they are used.
+- `.env.example`, CLAUDE.md, the smoke-test steps and `doctor.sh` updated.
+
+---
+
+## 14. Opt-in prompt follow-ups from the Sprint 2 review
+**Size:** S (reviewer findings on the "No thanks" prompt, accepted as deferred)
+
+- **The prompt never shows for a product whose first review is at a later stage.** `WriteReviewPage` sets `firstReview` only for an `INITIAL` review, but the API accepts a thread that starts at a later stage. Decide whether "first review of a product" means the first review of any stage, and test it.
+- **One test cannot fail:** `rejects {"nudgePromptDismissedAt": null}` in `backend/tests/nudges/api.test.ts` already passed before the field existed (the schema is `.strict()`). Keep it as a guard, but add a test that fails without the dismiss endpoint's own rules if there is a gap.
+- **No test for a failed decline:** the button should come back, the error show, and the prompt stay.
+- **Duplicated error message:** if both the opt-in and the decline fail, "Could not save" shows twice; after a successful decline, a short "You can turn reminders on in your profile" would help.
 
 ---
 
