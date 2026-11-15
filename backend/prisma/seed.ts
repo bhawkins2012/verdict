@@ -364,7 +364,7 @@ async function main() {
         create: [
           {
             userId: bob.id,
-            targetStage: ReviewStage.ONE_MONTH,
+            targetStage: ReviewStage.TWO_WEEKS,
             scheduledFor: addWeeks(new Date(), 1),
             sendAt: addWeeks(new Date(), 1),
             status: NudgeStatus.PENDING,

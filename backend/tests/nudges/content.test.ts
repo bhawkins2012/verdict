@@ -38,14 +38,14 @@ describe('unsubscribe tokens', () => {
 describe('nudge email', () => {
   const email = renderNudgeEmail(
     {
-      nudgeId: 'n1', stage: 'ONE_MONTH', productId: 'p1', productName: 'Kettle <script>alert(1)</script>\r\nBcc: x@evil.test',
+      nudgeId: 'n1', stage: 'TWO_WEEKS', productId: 'p1', productName: 'Kettle <script>alert(1)</script>\r\nBcc: x@evil.test',
       userId: 'u1', to: 'u@example.com', displayName: 'Ann & "Bo"', fromPurchase: true,
     },
     { frontendUrl: 'http://app.test', fromEmail: 'Verdict <r@verdict.test>', unsubscribeSecret: SECRET, postalAddress: '1 Test St' }
   )
 
   it('deep-links to the review form for the stage and nudge', () => {
-    expect(email.text).toContain('http://app.test/products/p1/review?stage=ONE_MONTH&nudgeId=n1')
+    expect(email.text).toContain('http://app.test/products/p1/review?stage=TWO_WEEKS&nudgeId=n1')
   })
 
   it('has the unsubscribe link, one-click headers, and the postal address in the footer', () => {

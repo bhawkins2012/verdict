@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
 import { purchaseDateSchema } from '../lib/purchaseDate'
+import { STAGE_ORDER } from '../stages'
 import { completeNudgesForReview } from '../nudges/lifecycle'
 import { enqueueAfterCommit } from '../nudges/runtime'
 import { computeThreadDrift } from '../services/driftService'
@@ -191,7 +192,7 @@ reviewsRouter.get('/product/:productId/stats', async (req: Request, res: Respons
 
   // Compute survivorship curve: avg score per stage
   const byStage: Record<string, { scores: number[], count: number }> = {}
-  const stageOrder = ['INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS']
+  const stageOrder = STAGE_ORDER.filter((s) => s !== 'CUSTOM')
 
   for (const r of reviews) {
     if (!byStage[r.stage]) byStage[r.stage] = { scores: [], count: 0 }

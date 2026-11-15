@@ -7,7 +7,7 @@ import { cleanupNudgeFixtures, days, makeThread, makeUser, mockProvider, raceOnN
 
 const NOW = new Date('2026-11-14T12:00:00Z')
 
-/** A user's thread with an overdue ONE_MONTH nudge whose send time has passed. */
+/** A user's thread with an overdue TWO_WEEKS nudge (started 40 days ago) whose send time has passed. */
 async function dueNudge(user: User, productName?: string) {
   const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: new Date(NOW.getTime() - days(40)) }], { productName })
   const [id] = await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, NOW))
@@ -46,7 +46,7 @@ describe('processNudge: the send-claim', () => {
   it('completes instead of sending when the stage was reviewed after it was scheduled', async () => {
     const user = await makeUser()
     const nudge = await dueNudge(user)
-    await prisma.review.create({ data: { threadId: nudge.threadId, stage: 'ONE_MONTH', scoreOverall: 6 } })
+    await prisma.review.create({ data: { threadId: nudge.threadId, stage: nudge.targetStage, scoreOverall: 6 } })
     const { provider, send } = mockProvider()
 
     expect((await processNudge(nudge.id, senderDeps(provider, NOW))).kind).toBe('completed')

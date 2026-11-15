@@ -1,7 +1,7 @@
 // Nudge email content (docs/adr-nudges.md D6): plain, short, no images, no tracking pixels.
 import { ReviewStage } from '@prisma/client'
 import { EmailMessage } from './providers'
-import { STAGE_LABEL } from './planner'
+import { STAGE_LABEL } from '../stages'
 import { unsubscribeUrl } from './unsubscribe'
 
 export interface NudgeEmailInput {

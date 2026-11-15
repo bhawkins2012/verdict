@@ -112,17 +112,31 @@ describe('reconcileOnce sweep', () => {
     const user = await makeUser()
     const start = new Date('2026-01-10T10:00:00Z')
     const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
-    const [weekId] = await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, new Date('2026-01-18T00:00:00Z')))
-    await prisma.nudge.update({ where: { id: weekId }, data: { status: 'SENT', channel: 'EMAIL', sentAt: new Date('2026-01-18T09:00:00Z') } })
+    const [weekId] = await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, new Date('2026-01-25T00:00:00Z')))
+    await prisma.nudge.update({ where: { id: weekId }, data: { status: 'SENT', channel: 'EMAIL', sentAt: new Date('2026-01-25T09:00:00Z') } })
 
-    const later = new Date('2026-02-11T00:00:00Z') // 1 month is now due
+    const later = new Date('2026-04-11T00:00:00Z') // 3 months is now due
     await reconcileOnce({ db: prisma, queue: new FakeQueue(), process: async () => ({ kind: 'not-claimed' as const }), now: () => later }, { sweep: true })
 
     const rows = await prisma.nudge.findMany({ where: { threadId: thread.id }, orderBy: { scheduledFor: 'asc' } })
     expect(rows.map((n) => [n.targetStage, n.status])).toEqual([
-      ['ONE_WEEK', 'CANCELLED'],
-      ['ONE_MONTH', 'PENDING'],
+      ['TWO_WEEKS', 'CANCELLED'],
+      ['THREE_MONTHS', 'PENDING'],
     ])
+  })
+})
+
+describe('reconcileOnce sweep and the cadence change', () => {
+  it('cancels existing out-of-cadence pending nudges and plans the cadence stage', async () => {
+    const user = await makeUser()
+    const start = new Date('2026-01-10T10:00:00Z')
+    const thread = await makeThread(user.id, [{ stage: 'INITIAL', at: start }])
+    const old = await prisma.nudge.create({ data: { userId: user.id, threadId: thread.id, targetStage: 'ONE_MONTH', scheduledFor: new Date('2026-02-10T10:00:00Z'), sendAt: new Date('2026-02-10T10:00:00Z') } })
+
+    await reconcileOnce({ db: prisma, queue: new FakeQueue(), process: async () => ({ kind: 'not-claimed' as const }), now: () => new Date('2026-01-25T00:00:00Z') }, { sweep: true })
+
+    expect((await prisma.nudge.findUniqueOrThrow({ where: { id: old.id } })).status).toBe('CANCELLED')
+    expect((await prisma.nudge.findMany({ where: { threadId: thread.id, status: 'PENDING' } })).map((n) => n.targetStage)).toEqual(['TWO_WEEKS'])
   })
 })
 

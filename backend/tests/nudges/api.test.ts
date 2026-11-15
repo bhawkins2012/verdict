@@ -22,8 +22,8 @@ async function apiUser() {
 /** One thread per call; `dueDaysAgo` < 0 means the nudge is due in the future. */
 async function nudgeFor(userId: string, dueDaysAgo: number) {
   const now = new Date()
-  // INITIAL review 7+dueDaysAgo days ago => the 1-week nudge was due `dueDaysAgo` days ago.
-  const thread = await makeThread(userId, [{ stage: 'INITIAL', at: new Date(now.getTime() - days(7 + dueDaysAgo)) }])
+  // INITIAL review 14+dueDaysAgo days ago => the 2-week nudge was due `dueDaysAgo` days ago.
+  const thread = await makeThread(userId, [{ stage: 'INITIAL', at: new Date(now.getTime() - days(14 + dueDaysAgo)) }])
   await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, now))
   return prisma.nudge.findFirstOrThrow({ where: { threadId: thread.id } })
 }
@@ -64,21 +64,22 @@ describe('skip and snooze', () => {
     const res = await api().post(`/api/nudges/${n.id}/skip`).set(bearer(u.accessToken))
     expect(res.status).toBe(200)
     expect((await prisma.nudge.findUniqueOrThrow({ where: { id: n.id } })).status).toBe('SKIPPED')
-    expect((await prisma.nudge.findMany({ where: { threadId: n.threadId, status: 'PENDING' } })).map((x) => x.targetStage)).toEqual(['ONE_MONTH'])
+    expect((await prisma.nudge.findMany({ where: { threadId: n.threadId, status: 'PENDING' } })).map((x) => x.targetStage)).toEqual(['THREE_MONTHS'])
   })
 
   it('skipping a check-in does not bring back an earlier stage it had superseded', async () => {
     const u = await apiUser()
-    const thread = await makeThread(u.id, [{ stage: 'INITIAL', at: new Date(Date.now() - days(40)) }])
+    // Started 100 days ago: 2 weeks and 3 months are both due; the 3-month check-in supersedes 2 weeks.
+    const thread = await makeThread(u.id, [{ stage: 'INITIAL', at: new Date(Date.now() - days(100)) }])
     await prisma.$transaction((tx) => syncThreadNudges(tx, thread.id, new Date()))
-    const [monthNudge] = (await api().get('/api/nudges').set(bearer(u.accessToken))).body
-    expect(monthNudge.targetStage).toBe('ONE_MONTH')
+    const [threeMonths] = (await api().get('/api/nudges').set(bearer(u.accessToken))).body
+    expect(threeMonths.targetStage).toBe('THREE_MONTHS')
 
-    await api().post(`/api/nudges/${monthNudge.id}/skip`).set(bearer(u.accessToken))
+    await api().post(`/api/nudges/${threeMonths.id}/skip`).set(bearer(u.accessToken))
 
     expect((await api().get('/api/nudges').set(bearer(u.accessToken))).body).toEqual([])
     const active = await prisma.nudge.findMany({ where: { threadId: thread.id, status: 'PENDING' } })
-    expect(active.map((n) => n.targetStage)).toEqual(['THREE_MONTHS'])
+    expect(active.map((n) => n.targetStage)).toEqual(['ONE_YEAR'])
   })
 
   it('snooze hides it, moves the send time after the snooze, and is limited to 3', async () => {
