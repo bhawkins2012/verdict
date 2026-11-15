@@ -11,7 +11,7 @@ import { EmailMessage, EmailProvider } from '../src/nudges/providers'
 import { processNudge } from '../src/nudges/sender'
 import { syncThreadNudges } from '../src/nudges/lifecycle'
 import { api, bearer, cleanup, registerUser, uniqueUser } from './helpers'
-import { makeThread, mockProvider, senderDeps } from './nudges/fixtures'
+import { makeThread, mockProvider, raceOnTable, senderDeps } from './nudges/fixtures'
 
 const userIds: string[] = []
 let sent: EmailMessage[] = []
@@ -66,7 +66,9 @@ describe('tokens', () => {
 
   it('work once, including two concurrent confirmations (exactly one succeeds)', async () => {
     const { u, t } = await tokenFor(new Date())
-    const results = await Promise.all([1, 2, 3].map(() => consumeVerificationToken(prisma, t.id, t.verifier, new Date())))
+    // Forced race: all three read the unused token at the same instant.
+    const settled = await raceOnTable('email_verification_tokens', [1, 2, 3].map(() => () => consumeVerificationToken(prisma, t.id, t.verifier, new Date())))
+    const results = settled.map((r) => (r.status === 'fulfilled' ? r.value : { ok: false }))
     expect(results.filter((r) => r.ok)).toHaveLength(1)
     expect(await consumeVerificationToken(prisma, t.id, t.verifier, new Date())).toEqual({ ok: false, reason: 'used' })
     expect(await prisma.user.findUniqueOrThrow({ where: { id: u.id } })).toMatchObject({ emailVerified: true, emailVerifiedAt: expect.any(Date) })
@@ -408,11 +410,15 @@ describe('GET /api/auth/dev/verification-link', () => {
   })
 
   it.each(['production', 'staging', ''])('does not exist when NODE_ENV=%j', async (env) => {
+    setTransactionalProviderForTests(null) // the dry-run outbox holds a link, so a 404 can only come from the guard
     const u = await newUser()
+    expect((await api().get('/api/auth/dev/verification-link').set(bearer(u.accessToken))).status).toBe(200)
     const prev = process.env.NODE_ENV
     process.env.NODE_ENV = env
     try {
-      expect((await api().get('/api/auth/dev/verification-link').set(bearer(u.accessToken))).status).toBe(404)
+      const res = await api().get('/api/auth/dev/verification-link').set(bearer(u.accessToken))
+      expect(res.status).toBe(404)
+      expect(res.body).toEqual({ error: 'Not found' })
     } finally {
       process.env.NODE_ENV = prev
     }

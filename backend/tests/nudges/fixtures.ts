@@ -96,14 +96,22 @@ export const at = (iso: string) => new Date(iso)
  * EXCLUSIVE lock, every task blocks at its first read of the table, then the gate opens and they all
  * proceed together. Makes races (claims, caps, concurrent syncs) deterministic instead of luck-based.
  */
-export async function raceOnNudges<T>(tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
+export function raceOnNudges<T>(tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
+  return raceOnTable('nudges', tasks)
+}
+
+/**
+ * Force a race: hold an ACCESS EXCLUSIVE lock on `table` while the tasks start, so they all block on their
+ * first read of it and then proceed at the same instant.
+ */
+export async function raceOnTable<T>(table: string, tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
   let open!: () => void
   const gate = new Promise<void>((r) => (open = r))
   let locked!: () => void
   const isLocked = new Promise<void>((r) => (locked = r))
   const gateTx = prisma.$transaction(
     async (tx) => {
-      await tx.$executeRawUnsafe('LOCK TABLE "nudges" IN ACCESS EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe(`LOCK TABLE "${table.replace(/"/g, '')}" IN ACCESS EXCLUSIVE MODE`)
       locked()
       await gate
     },
