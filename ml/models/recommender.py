@@ -30,6 +30,7 @@ VERSION = "1.0.0-collab-filter"
 STAGE_WEIGHTS = {
     "INITIAL": 0.6,
     "ONE_WEEK": 0.7,
+    "TWO_WEEKS": 0.78,
     "ONE_MONTH": 0.85,
     "THREE_MONTHS": 0.90,
     "SIX_MONTHS": 0.95,
