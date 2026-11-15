@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
-import { ReviewThread, Review, STAGE_LABELS, STAGE_ORDER } from '../types'
+import { ReviewThread, Review, STAGE_LABELS } from '../types'
+import { nextCheckInStage, sortByStage, useStageConfig } from '../lib/stages'
+import { CheckinOptInPrompt } from '../components/settings/CheckinOptInPrompt'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { ScoreRing } from '../components/ui/ScoreRing'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
@@ -11,6 +13,9 @@ import clsx from 'clsx'
 
 export function ReviewThreadPage() {
   const { id: productId } = useParams<{ id: string }>()
+  const location = useLocation()
+  const justWroteFirstReview = (location.state as { firstReview?: boolean } | null)?.firstReview === true
+  const { data: stageConfig } = useStageConfig()
 
   const { data: thread, isLoading } = useQuery<ReviewThread>({
     queryKey: ['thread', productId],
@@ -22,14 +27,12 @@ export function ReviewThreadPage() {
     queryFn: () => api.get(`/reviews/product/${productId}/stats`).then(r => r.data),
   })
 
-  if (isLoading) return <LoadingSkeleton />
+  if (isLoading || !stageConfig) return <LoadingSkeleton />
   if (!thread) return null
 
-  const sortedReviews = [...(thread.reviews || [])].sort(
-    (a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)
-  )
-  const completedStages = new Set(thread.stagesCompleted)
-  const nextStage = STAGE_ORDER.find(s => !completedStages.has(s))
+  // Order and the next check-in come from the API's stage config (single source of truth).
+  const sortedReviews = sortByStage(stageConfig, thread.reviews || [])
+  const nextStage = nextCheckInStage(stageConfig, thread.stagesCompleted || [])
 
   const initialScore = sortedReviews[0]?.scoreOverall
   const latestScore = sortedReviews[sortedReviews.length - 1]?.scoreOverall
@@ -40,6 +43,8 @@ export function ReviewThreadPage() {
       <Link to="/dashboard" className="btn-ghost flex items-center gap-2 mb-6 -ml-2 w-fit">
         <ArrowLeft size={16} /> Dashboard
       </Link>
+
+      {justWroteFirstReview && <CheckinOptInPrompt />}
 
       {/* Product header */}
       <div className="card p-6 mb-6">

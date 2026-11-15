@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { api } from '../../lib/api'
+import { useStageConfig } from '../../lib/stages'
 
 interface NotificationSettings {
   emailNudgesEnabled: boolean
@@ -26,6 +27,7 @@ const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00`
 /** Email check-in preferences (docs/adr-nudges.md D5). Off until the user turns it on. */
 export function EmailRemindersCard() {
   const queryClient = useQueryClient()
+  const { data: stageConfig } = useStageConfig()
   const { data: settings } = useQuery<NotificationSettings>({
     queryKey: ['notification-settings'],
     queryFn: () => api.get('/users/me/notification-settings').then((r) => r.data),
@@ -40,7 +42,7 @@ export function EmailRemindersCard() {
   // snaps back while the request is in flight.
   const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null)
 
-  if (!settings) return null
+  if (!settings || !stageConfig) return null
   const tz = browserTimeZone()
   const enabled = pendingEnabled ?? settings.emailNudgesEnabled
 
@@ -62,7 +64,7 @@ export function EmailRemindersCard() {
           onChange={(e) => toggle(e.target.checked)}
         />
         <span>
-          <span className="text-sm text-ink-800">Email me review check-ins</span>
+          <span className="text-sm text-ink-800">{stageConfig.consentCopy}</span>
           <span className="block text-xs text-ink-500">
             When it&apos;s time for your next review of a product you track, we&apos;ll email you (at most one email a day).
             Every email has an unsubscribe link. Check-ins always appear here in Verdict either way.

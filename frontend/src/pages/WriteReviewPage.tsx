@@ -56,7 +56,7 @@ export function WriteReviewPage() {
       queryClient.invalidateQueries({ queryKey: ['threads'] })
       queryClient.invalidateQueries({ queryKey: ['thread', productId] })
       queryClient.invalidateQueries({ queryKey: ['nudges'] })
-      navigate(`/products/${productId}/thread`)
+      navigate(`/products/${productId}/thread`, { state: { firstReview: stage === 'INITIAL' } })
     },
   })
 

@@ -1,6 +1,7 @@
 export type ReviewStage =
   | 'INITIAL'
   | 'ONE_WEEK'
+  | 'TWO_WEEKS'
   | 'ONE_MONTH'
   | 'THREE_MONTHS'
   | 'SIX_MONTHS'
@@ -11,6 +12,7 @@ export type ReviewStage =
 export const STAGE_LABELS: Record<ReviewStage, string> = {
   INITIAL: 'First Impression',
   ONE_WEEK: '1 Week Later',
+  TWO_WEEKS: '2 Weeks Later',
   ONE_MONTH: '1 Month Later',
   THREE_MONTHS: '3 Months Later',
   SIX_MONTHS: '6 Months Later',
@@ -19,10 +21,8 @@ export const STAGE_LABELS: Record<ReviewStage, string> = {
   CUSTOM: 'Custom',
 }
 
-export const STAGE_ORDER: ReviewStage[] = [
-  'INITIAL', 'ONE_WEEK', 'ONE_MONTH', 'THREE_MONTHS',
-  'SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS', 'CUSTOM'
-]
+// Stage order and the nudge cadence come from the API (GET /api/config, see lib/stages.ts), never from
+// a list here.
 
 export interface Review {
   id: string
