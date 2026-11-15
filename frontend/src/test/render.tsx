@@ -9,16 +9,21 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+/** A React Query client like the app's (no retries). Pass one to render() to share its cache across mounts. */
+export function newQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
+
 export interface Rendered {
   container: HTMLDivElement
   unmount: () => void
 }
 
 /** Render `element` at `path` (matching `route`), with a fresh React Query client (no retries). */
-export function render(element: ReactElement, opts: { route?: string; path?: string; state?: unknown } = {}): Rendered {
+export function render(element: ReactElement, opts: { route?: string; path?: string; state?: unknown; client?: QueryClient } = {}): Rendered {
   const container = document.createElement('div')
   document.body.appendChild(container)
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  const client = opts.client ?? newQueryClient()
   const path = opts.path ?? '/'
   let root: Root | undefined
   act(() => {

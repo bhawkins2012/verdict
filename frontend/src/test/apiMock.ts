@@ -9,8 +9,8 @@ function call(method: string, url: string, body?: unknown) {
   const handler = routes.get(`${method} ${url}`)
   if (!handler) return Promise.reject(new Error(`no mock for ${method} ${url}`))
   try {
-    const result = handler(body)
-    return result instanceof Error ? Promise.reject(result) : Promise.resolve({ data: result })
+    // A handler may return a value, an Error (rejects) or a promise of either (e.g. to hold a request in flight).
+    return Promise.resolve(handler(body)).then((result) => (result instanceof Error ? Promise.reject(result) : { data: result }))
   } catch (e) {
     return Promise.reject(e)
   }

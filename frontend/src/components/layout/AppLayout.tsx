@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import clsx from 'clsx'
 
@@ -23,8 +23,12 @@ export function AppLayout() {
 
   const pendingNudgeCount = nudges?.length || 0
 
+  const queryClient = useQueryClient()
+
   const handleLogout = async () => {
     await logout()
+    // Drop every cached response, so the next user on this browser never sees this user's data.
+    queryClient.clear()
     navigate('/login')
   }
 
