@@ -79,6 +79,7 @@ const notificationSettingsSelect = {
   timezone: true,
   nudgeSendHour: true,
   emailVerified: true,
+  nudgePromptDismissedAt: true,
 } as const
 
 const notificationSettingsSchema = z
@@ -91,6 +92,16 @@ const notificationSettingsSchema = z
 
 // GET /api/users/me/notification-settings
 usersRouter.get('/me/notification-settings', authenticate, async (req: Request, res: Response) => {
+  const settings = await prisma.user.findUnique({ where: { id: req.userId! }, select: notificationSettingsSelect })
+  if (!settings) throw new AppError(404, 'User not found')
+  res.json(settings)
+})
+
+// POST /api/users/me/nudge-prompt/dismiss — the user declined the post-first-review email prompt.
+// Records the first decline only; the prompt is never shown again. Changes no other setting, and
+// nothing else (opting in or out on the profile) clears it.
+usersRouter.post('/me/nudge-prompt/dismiss', authenticate, async (req: Request, res: Response) => {
+  await prisma.user.updateMany({ where: { id: req.userId!, nudgePromptDismissedAt: null }, data: { nudgePromptDismissedAt: new Date() } })
   const settings = await prisma.user.findUnique({ where: { id: req.userId! }, select: notificationSettingsSelect })
   if (!settings) throw new AppError(404, 'User not found')
   res.json(settings)

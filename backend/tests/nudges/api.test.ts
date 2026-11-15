@@ -191,9 +191,35 @@ describe('notification settings', () => {
     [{ nudgeSendHour: 24 }],
     [{ nudgeSendHour: 7.5 }],
     [{ emailVerified: true }], // not settable here
+    [{ nudgePromptDismissedAt: null }], // only the dismiss endpoint sets it; nothing clears it
   ])('rejects %j', async (body) => {
     const u = await apiUser()
     expect((await api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send(body)).status).toBe(400)
+  })
+
+  it('declining the opt-in prompt is persisted once; profile opt-in/out afterwards clears nothing', async () => {
+    const u = await apiUser()
+    const get = async () => (await api().get('/api/users/me/notification-settings').set(bearer(u.accessToken))).body
+    expect((await get()).nudgePromptDismissedAt).toBeNull()
+
+    const first = await api().post('/api/users/me/nudge-prompt/dismiss').set(bearer(u.accessToken))
+    expect(first.status).toBe(200)
+    expect(first.body).toMatchObject({ nudgePromptDismissedAt: expect.any(String), emailNudgesEnabled: false, emailNudgesConsentAt: null })
+    const at = first.body.nudgePromptDismissedAt
+
+    // A second decline keeps the first timestamp.
+    await new Promise((r) => setTimeout(r, 5))
+    expect((await api().post('/api/users/me/nudge-prompt/dismiss').set(bearer(u.accessToken))).body.nudgePromptDismissedAt).toBe(at)
+
+    // Opting in (and out) on the profile later works and leaves the decline in place.
+    const on = await api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send({ emailNudgesEnabled: true })
+    expect(on.body).toMatchObject({ emailNudgesEnabled: true, emailNudgesConsentAt: expect.any(String), nudgePromptDismissedAt: at })
+    const off = await api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send({ emailNudgesEnabled: false })
+    expect(off.body).toMatchObject({ emailNudgesEnabled: false, nudgePromptDismissedAt: at })
+  })
+
+  it('the dismiss endpoint needs a login', async () => {
+    expect((await api().post('/api/users/me/nudge-prompt/dismiss')).status).toBe(401)
   })
 
   it('changing the time zone moves pending send times to the new local hour', async () => {
