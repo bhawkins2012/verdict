@@ -77,7 +77,7 @@ describe('review thread page', () => {
 
   describe('opt-in prompt across products (until the user opts in or declines)', () => {
     // Server-side settings shared by every render, like the real API.
-    let settings: { emailNudgesEnabled: boolean; timezone: string; nudgePromptDismissedAt: string | null }
+    let settings: { emailNudgesEnabled: boolean; timezone: string; nudgePromptDismissedAt: string | null; emailNudgesFirstEnabledAt: string | null }
     const firstReviewOf = async (productId: string) => {
       view?.unmount()
       view = render(<ReviewThreadPage />, { route: '/products/:id', path: `/products/${productId}`, state: { firstReview: true } })
@@ -85,14 +85,19 @@ describe('review thread page', () => {
       return view.container.querySelector('[data-testid="checkin-opt-in"]')
     }
     beforeEach(() => {
-      settings = { emailNudgesEnabled: false, timezone: 'UTC', nudgePromptDismissedAt: null }
+      settings = { emailNudgesEnabled: false, timezone: 'UTC', nudgePromptDismissedAt: null, emailNudgesFirstEnabledAt: null }
       routes.set('GET /config', () => CONFIG)
       for (const p of ['p1', 'p2']) {
         routes.set(`GET /reviews/thread/${p}`, () => thread(null, p))
         routes.set(`GET /reviews/product/${p}/stats`, () => ({ survivorshipCurve: [] }))
       }
       routes.set('GET /users/me/notification-settings', () => settings)
-      routes.set('PUT /users/me/notification-settings', (body) => (settings = { ...settings, ...(body as object) }))
+      routes.set('PUT /users/me/notification-settings', (body) => {
+        const b = body as { emailNudgesEnabled?: boolean }
+        // Like the server: the first opt-in is recorded and never cleared.
+        const first = b.emailNudgesEnabled && !settings.emailNudgesFirstEnabledAt ? { emailNudgesFirstEnabledAt: '2026-11-15T00:00:00.000Z' } : {}
+        return (settings = { ...settings, ...(body as object), ...first })
+      })
       routes.set('POST /users/me/nudge-prompt/dismiss', () => (settings = { ...settings, nudgePromptDismissedAt: '2026-11-15T00:00:00.000Z' }))
     })
 
@@ -106,6 +111,14 @@ describe('review thread page', () => {
       await click([...(prompt?.querySelectorAll('button') ?? [])].find((b) => /No thanks/.test(b.textContent ?? '')) ?? null)
       await settle()
       expect(settings.nudgePromptDismissedAt).not.toBeNull()
+      expect(await firstReviewOf('p2')).toBeNull()
+    })
+
+    it('opted in, then opted out elsewhere (profile or unsubscribe link): still not shown again', async () => {
+      const prompt = await firstReviewOf('p1')
+      await click(prompt?.querySelector('input[type="checkbox"]') ?? null)
+      await settle()
+      settings = { ...settings, emailNudgesEnabled: false } // e.g. POST /api/nudges/unsubscribe
       expect(await firstReviewOf('p2')).toBeNull()
     })
 

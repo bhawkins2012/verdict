@@ -7,6 +7,8 @@ interface NotificationSettings {
   emailNudgesEnabled: boolean
   timezone: string
   nudgePromptDismissedAt: string | null
+  /** First time the user turned email reminders on (any path); never cleared by opting out. */
+  emailNudgesFirstEnabledAt: string | null
 }
 
 const browserTimeZone = (): string | undefined => {
@@ -26,11 +28,15 @@ const browserTimeZone = (): string | undefined => {
 export function CheckinOptInPrompt() {
   const queryClient = useQueryClient()
   const { data: config } = useStageConfig()
-  const { data: settings } = useQuery<NotificationSettings>({
+  // Always refetch on mount and decide only from that fresh response: a cached copy may be stale (changed
+  // in another tab) or, before a logout cleared the cache, another user's.
+  const { data: settings, isFetchedAfterMount } = useQuery<NotificationSettings>({
     queryKey: ['notification-settings'],
     queryFn: () => api.get('/users/me/notification-settings').then((r) => r.data),
+    refetchOnMount: 'always',
   })
-  // Decided once, when the prompt first renders: users who already opted in or declined never see it.
+  // Decided once, from the first fresh fetch: users who ever opted in (even if they later opted out,
+  // e.g. with the unsubscribe link) or who declined never see it.
   const [eligible, setEligible] = useState<boolean | null>(null)
   const [checked, setChecked] = useState(false)
   const update = useMutation({
@@ -51,9 +57,9 @@ export function CheckinOptInPrompt() {
     },
   })
 
-  if (!config || !settings) return null
+  if (!config || !settings || !isFetchedAfterMount) return null
   if (eligible === null) {
-    setEligible(!settings.emailNudgesEnabled && !settings.nudgePromptDismissedAt)
+    setEligible(!settings.emailNudgesEnabled && !settings.emailNudgesFirstEnabledAt && !settings.nudgePromptDismissedAt)
     return null
   }
   if (!eligible) return null
@@ -65,7 +71,8 @@ export function CheckinOptInPrompt() {
           type="checkbox"
           className="mt-1"
           checked={checked}
-          disabled={update.isPending}
+          // Not while a decline is in flight: its success hides the prompt, which would swallow this result.
+          disabled={update.isPending || dismiss.isPending}
           onChange={(e) => {
             setChecked(e.target.checked)
             update.mutate(e.target.checked)

@@ -8,7 +8,7 @@ async function main() {
   console.log('🌱 Seeding database...')
 
   // ── Users ──────────────────────────────────────────────
-  const passwordHash = await bcrypt.hash('password123', 10)
+  const passwordHash = await bcrypt.hash('password123', 12) // same cost as register and the login dummy hash
 
   const alice = await prisma.user.upsert({
     where: { email: 'alice@example.com' },
@@ -19,6 +19,7 @@ async function main() {
       passwordHash,
       displayName: 'Alice Chen',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_25_34,
@@ -42,6 +43,7 @@ async function main() {
       passwordHash,
       displayName: 'Bob Martinez',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_35_44,
@@ -65,6 +67,7 @@ async function main() {
       passwordHash,
       displayName: 'Carol Kim',
       emailVerified: true,
+      emailVerifiedAt: new Date(),
       demographics: {
         create: {
           ageRange: AgeRange.AGE_45_54,

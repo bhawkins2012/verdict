@@ -1,14 +1,14 @@
 import axios from 'axios'
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 
 export function RegisterPage() {
   const [form, setForm] = useState({ email: '', username: '', password: '', displayName: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const { register } = useAuthStore()
-  const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -16,7 +16,8 @@ export function RegisterPage() {
     setLoading(true)
     try {
       await register(form)
-      navigate('/profile') // Send to profile to fill demographics
+      // The same screen whether or not the address already had an account (no enumeration).
+      setSubmitted(true)
     } catch (err) {
       setError((axios.isAxiosError<{ error?: string }>(err) && err.response?.data?.error) || 'Registration failed')
     } finally {
@@ -28,6 +29,21 @@ export function RegisterPage() {
     value: form[key],
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setForm(prev => ({ ...prev, [key]: e.target.value }))
   })
+
+  if (submitted) {
+    return (
+      <div className="animate-fade-in" data-testid="check-email">
+        <h2 className="font-display text-3xl text-white mb-2">Check your email, then sign in.</h2>
+        <p className="text-ink-400 mb-8">
+          We sent a message to <strong className="text-ink-200">{form.email.trim().toLowerCase()}</strong>. Confirm your address
+          with the link in it, then sign in. You can sign in before confirming, too.
+        </p>
+        <Link to="/login" className="inline-block w-full text-center py-3 bg-amber-500 hover:bg-amber-400 text-white font-medium rounded-xl transition-colors">
+          Sign in
+        </Link>
+      </div>
+    )
+  }
 
   return (
     <div className="animate-fade-in">

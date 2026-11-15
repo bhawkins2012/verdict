@@ -11,6 +11,7 @@ interface NotificationSettings {
   nudgeSendHour: number
   emailVerified: boolean
   nudgePromptDismissedAt: string | null
+  emailNudgesFirstEnabledAt: string | null
 }
 
 type SettingsUpdate = Partial<Pick<NotificationSettings, 'emailNudgesEnabled' | 'timezone' | 'nudgeSendHour'>>

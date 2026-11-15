@@ -192,6 +192,7 @@ describe('notification settings', () => {
     [{ nudgeSendHour: 7.5 }],
     [{ emailVerified: true }], // not settable here
     [{ nudgePromptDismissedAt: null }], // only the dismiss endpoint sets it; nothing clears it
+    [{ emailNudgesFirstEnabledAt: null }], // set by the server on the first opt-in; never cleared
   ])('rejects %j', async (body) => {
     const u = await apiUser()
     expect((await api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send(body)).status).toBe(400)
@@ -216,6 +217,27 @@ describe('notification settings', () => {
     expect(on.body).toMatchObject({ emailNudgesEnabled: true, emailNudgesConsentAt: expect.any(String), nudgePromptDismissedAt: at })
     const off = await api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send({ emailNudgesEnabled: false })
     expect(off.body).toMatchObject({ emailNudgesEnabled: false, nudgePromptDismissedAt: at })
+  })
+
+  it('the first opt-in is recorded once and survives opting out on the profile and by the unsubscribe link', async () => {
+    const u = await apiUser()
+    const put = (body: object) => api().put('/api/users/me/notification-settings').set(bearer(u.accessToken)).send(body)
+    expect((await put({ timezone: 'Europe/Berlin' })).body.emailNudgesFirstEnabledAt).toBeNull()
+
+    const on = await put({ emailNudgesEnabled: true })
+    const first = on.body.emailNudgesFirstEnabledAt
+    expect(first).toEqual(expect.any(String))
+
+    // Opt out on the profile, then opt in again: the first time is kept.
+    expect((await put({ emailNudgesEnabled: false })).body).toMatchObject({ emailNudgesEnabled: false, emailNudgesFirstEnabledAt: first })
+    await new Promise((r) => setTimeout(r, 5))
+    expect((await put({ emailNudgesEnabled: true })).body.emailNudgesFirstEnabledAt).toBe(first)
+
+    // Unsubscribe link: opted out, first opt-in still recorded.
+    const t = signUnsubscribeToken(loadNudgeConfig().unsubscribeSecret, u.id)
+    await api().post(`/api/nudges/unsubscribe?u=${u.id}&t=${t}`)
+    const after = (await api().get('/api/users/me/notification-settings').set(bearer(u.accessToken))).body
+    expect(after).toMatchObject({ emailNudgesEnabled: false, emailNudgesFirstEnabledAt: first })
   })
 
   it('the dismiss endpoint needs a login', async () => {
@@ -249,9 +271,11 @@ describe('development tools', () => {
     expect(res.body.nudge).toMatchObject({ status: 'SENT', channel: 'EMAIL' })
 
     const outbox = await api().get('/api/nudges/dev/outbox').set(bearer(u.accessToken))
-    expect(outbox.body).toHaveLength(1)
-    expect(outbox.body[0].text).toContain(`/products/`)
-    expect(outbox.body[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
+    // The outbox also holds the user's verification email from registration; count nudge emails only.
+    const nudgeEmails = outbox.body.filter((m: { idempotencyKey: string }) => m.idempotencyKey.startsWith('nudge/'))
+    expect(nudgeEmails).toHaveLength(1)
+    expect(nudgeEmails[0].text).toContain(`/products/`)
+    expect(nudgeEmails[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
   })
 
   it.each(['production', 'staging', 'prod', ''])('dev routes do not exist unless NODE_ENV is development or test (NODE_ENV=%j)', async (env) => {

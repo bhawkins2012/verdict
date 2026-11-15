@@ -33,25 +33,21 @@ All protected routes require a Bearer token:
 Authorization: Bearer <accessToken>
 ```
 
-### POST /auth/register
-Create a new user account.
+Email addresses are trimmed and lower-cased everywhere (register, login, email change). Design: `docs/adr-email-verification.md`.
 
-**Body:**
-```json
-{
-  "email": "user@example.com",
-  "username": "myusername",
-  "password": "securepass123",
-  "displayName": "Jane Smith"
-}
-```
-**Response:** `{ user, accessToken, refreshToken }`
+### POST /auth/register
+Create an account. **Does not sign in.**
+
+**Body:** `{ "email": "user@example.com", "username": "myusername", "password": "securepass123", "displayName": "Jane Smith" }`
+
+**Response:** `202 { "message": "Check your email, then sign in." }`, the same for a new address and an already-registered one (no account enumeration). A new address gets a verification email; a registered one gets a "someone tried to sign up" email instead (each at most once per address per hour). Then sign in with `POST /auth/login` (works before verifying).
+- `400` invalid body; `409 { "error": "Username already taken" }` (checked before the email, so it never depends on it); `429` per-IP limit.
 
 ---
 
 ### POST /auth/login
 **Body:** `{ email, password }`
-**Response:** `{ user, accessToken, refreshToken }`
+**Response:** `{ user, accessToken, refreshToken }`. `401 "Invalid credentials"` for an unknown address and a wrong password alike (same work on both).
 
 ---
 
@@ -63,7 +59,32 @@ Exchange a refresh token for new tokens.
 ---
 
 ### GET /auth/me *(auth)*
-Returns current user with demographics.
+Current user with demographics, plus `emailVerified`, `emailVerifiedAt` and `emailVerificationSentAt` (when the newest link for the current address was issued, or null).
+
+---
+
+### POST /auth/verify-email *(no auth)*
+**Body:** `{ "id": "<selector>", "token": "<verifier>" }`, taken from the link `/verify-email#id=…&t=…` by the confirm page (the page POSTs only when the user presses Confirm).
+**Response:** `200 { "verified": true }`. Every failure (unknown, wrong, used, superseded, expired, or issued for a previous address) is the same `400 { "error": "This link is invalid or has expired." }`. `429` per-IP limit.
+
+---
+
+### POST /auth/verification/resend *(auth)*
+A new link for **your own** address (the body takes no address). Supersedes earlier links.
+**Response:** `202 { "sentTo": "j***@example.com", "sentAt": "…" }`, or `200 { "alreadyVerified": true }`.
+`429 { "error", "retryAfterSeconds" }` with `Retry-After`: within 60 s of the last link; 5 links in the last hour; a link already went to this address in the last hour (checked before issuing, so the current link stays valid); or the per-IP limit.
+
+---
+
+### GET /auth/dev/verification-link *(auth, development only)*
+Your newest verification link from the dry-run outbox: `{ "link", "sentAt" }`, or 404. Only when `NODE_ENV` is `development` or `test` (404 otherwise).
+
+---
+
+### PUT /users/me/email *(auth)*
+**Body:** `{ "email": "new@example.com", "currentPassword": "…" }`
+**Response:** `200 { "email", "emailVerified": false, "changed": true }`: the address is changed and unverified, earlier links stop working, a link goes to the new address and a notice (new address masked) to the old one. Email-reminder consent is kept; nudges stay in-app until the new address is verified. Same address: `200 { …, "changed": false }`, nothing sent.
+`400` invalid body; `403` wrong current password; `409` address already in use; `429` (with `Retry-After`) after 5 attempts per hour (right or wrong password), when a link went to that address in the last hour, or the per-IP limit.
 
 ---
 
@@ -260,15 +281,15 @@ Update demographic profile.
 
 ### GET /users/me/notification-settings *(auth)*
 ```json
-{ "emailNudgesEnabled": false, "emailNudgesConsentAt": null, "timezone": "UTC", "nudgeSendHour": 9, "emailVerified": false, "nudgePromptDismissedAt": null }
+{ "emailNudgesEnabled": false, "emailNudgesConsentAt": null, "timezone": "UTC", "nudgeSendHour": 9, "emailVerified": false, "nudgePromptDismissedAt": null, "emailNudgesFirstEnabledAt": null }
 ```
-`nudgePromptDismissedAt` is set when the user declined the post-first-review opt-in prompt (see below).
+`nudgePromptDismissedAt` is set when the user declined the post-first-review opt-in prompt (see below). `emailNudgesFirstEnabledAt` is set the first time email reminders are turned on and never cleared (opting out keeps it).
 
 ### PUT /users/me/notification-settings *(auth)*
 Any subset of `{ "emailNudgesEnabled": boolean, "timezone": "Europe/Berlin", "nudgeSendHour": 0-23 }`. Turning email on records `emailNudgesConsentAt`; turning it off clears it. `timezone` must be an IANA name (400 otherwise). Changing the time zone or hour moves pending nudges to the new local send time. Unknown fields → 400, including `nudgePromptDismissedAt`: this endpoint never sets or clears a declined prompt, so opting in or out here later leaves it as it is.
 
 ### POST /users/me/nudge-prompt/dismiss *(auth)*
-The user declined the email opt-in prompt ("No thanks, don't ask again"). Sets `nudgePromptDismissedAt` to now if it is not set yet (a repeat keeps the first time) and changes nothing else. Returns the notification settings. The frontend shows the prompt after the first review of each product only while `emailNudgesEnabled` is false and `nudgePromptDismissedAt` is null.
+The user declined the email opt-in prompt ("No thanks, don't ask again"). Sets `nudgePromptDismissedAt` to now if it is not set yet (a repeat keeps the first time) and changes nothing else. Returns the notification settings. The frontend shows the prompt after the first review of each product only while the user has never opted in (`emailNudgesFirstEnabledAt` is null) and has not declined (`nudgePromptDismissedAt` is null).
 
 ---
 

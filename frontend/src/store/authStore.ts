@@ -42,14 +42,10 @@ export const useAuthStore = create<AuthState>()(
         })
       },
 
+      // Registration does not sign in: the API answers the same 202 for a new and an already-registered
+      // address (no account enumeration), so the user confirms their email and then signs in.
       register: async (data) => {
-        const res = await api.post('/auth/register', data)
-        set({
-          user: res.data.user,
-          accessToken: res.data.accessToken,
-          refreshToken: res.data.refreshToken,
-          isAuthenticated: true,
-        })
+        await api.post('/auth/register', data)
       },
 
       logout: async () => {

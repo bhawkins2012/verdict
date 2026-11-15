@@ -1,19 +1,32 @@
 # Backlog
 
-Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem statement, acceptance criteria and a rough size: **S** ≤ 1 day, **M** 2–4 days, **L** a week or more / needs a decision first. Facts below were checked against the code on `main` (`ef1f0db`); file references point at where to start.
+Issue-ready items. Each item has a problem statement, acceptance criteria and a rough size: **S** ≤ 1 day, **M** 2–4 days, **L** a week or more / needs a decision first. Item details below were checked against `main` at `ef1f0db` (before Sprint 1) unless they say otherwise; numbers are stable IDs, the table order is the priority.
 
-| # | Item | Size |
-|---|---|---|
-| 1 | [Jest `forceExit`: find and fix leaked handles](#1-jest-forceexit-find-and-fix-leaked-handles) | S |
-| 2 | [Lint and typecheck the ML service](#2-lint-and-typecheck-the-ml-service) | S |
-| 3 | [Recommender evaluation: data and metrics strategy](#3-recommender-evaluation-data-and-metrics-strategy) | L |
-| 4 | [Aggregation sources: legal and terms-of-service review](#4-aggregation-sources-legal-and-terms-of-service-review) | M |
-| 5 | [Preview deployment per PR](#5-preview-deployment-per-pr) | M (blocked on a decision) |
-| 6 | [Product page and review-thread UI polish](#6-product-page-and-review-thread-ui-polish) | M |
-| 7 | [Product creation flow and better search](#7-product-creation-flow-and-better-search) | M |
-| 8 | [Account settings page](#8-account-settings-page) | M |
-| 9 | [Email verification](#9-email-verification) | M |
-| 10 | [Validate list query parameters](#10-validate-list-query-parameters) | S |
+## Status (updated after Sprint 1, `main` at `dceeb12`)
+
+**Done in Sprint 1 (PR #5):** email check-in nudges (delivery, Redis resilience, new 2 weeks / 3 months / 1 year / 2 years cadence, opt-in prompt with persisted decline). Part of #8 shipped with it: the profile now has the email-reminder controls (opt-in, time zone, send hour). The "real nudge email needs legal review" part of #4 is still open.
+
+**In progress:** #9 Email verification (Sprint 2, branch `sprint-2-email-verification`): built; real delivery unverified until the `email:smoke` run with a real Resend key. Added from Sprint 2 decisions: #12–#14.
+
+## Priority order
+
+| Rank | # | Item | Size | Why this rank |
+|---|---|---|---|---|
+| — | 9 | [Email verification](#9-email-verification) | M | Sprint 2; unblocks real nudge email |
+| 1 | 4 | [Legal review: aggregation sources and real nudge email](#4-aggregation-sources-legal-and-terms-of-service-review) | M | After #9 it is the last blocker before any real email; non-engineering lead time |
+| 2 | 10 | [Validate list query parameters](#10-validate-list-query-parameters) | S | A verified 500 on `main`; small |
+| 3 | 11 | [Admin view of dead-lettered nudges](#11-admin-view-of-dead-lettered-nudges) | S | Needed before real sends: `FAILED` nudges are only visible in logs and `doctor.sh` |
+| 4 | 1 | [Jest `forceExit`: find and fix leaked handles](#1-jest-forceexit-find-and-fix-leaked-handles) | S | Test-suite hygiene; hides real leaks |
+| 5 | 2 | [Lint and typecheck the ML service](#2-lint-and-typecheck-the-ml-service) | S | Cheap; two past ML bugs would have been caught |
+| 6 | 8 | [Account settings page](#8-account-settings-page) | M | Email change from #9 lands here; password change and account deletion still missing |
+| 7 | 7 | [Product creation flow and better search](#7-product-creation-flow-and-better-search) | M | "Add product" button does nothing |
+| 8 | 6 | [Product page and review-thread UI polish](#6-product-page-and-review-thread-ui-polish) | M | |
+| 9 | 5 | [Preview deployment per PR](#5-preview-deployment-per-pr) | M | Blocked on a host decision |
+| 10 | 3 | [Recommender evaluation: data and metrics strategy](#3-recommender-evaluation-data-and-metrics-strategy) | L | Design first; low urgency at current data volume |
+| 11 | 12 | [Pending email change (confirm before switching)](#12-pending-email-change-confirm-before-switching) | M | Removes the remaining enumeration (409) in email change; fits with #8 |
+| 12 | 13 | [Rename the email provider settings to `EMAIL_*`](#13-rename-the-email-provider-settings-to-email_) | S | Naming only; account emails now share the nudge settings |
+| 13 | 14 | [Opt-in prompt follow-ups from the Sprint 2 review](#14-opt-in-prompt-follow-ups-from-the-sprint-2-review) | S | Small; one is a real gap (prompt never shown for a later-stage first review) |
+| 2* | 15 | [Unverified accounts can squat an address](#15-unverified-accounts-can-squat-an-address) | M | Security; rank right after #4 (needs password reset or expiry of unverified accounts) |
 
 ---
 
@@ -110,7 +123,7 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 ---
 
 ## 8. Account settings page
-**Size:** M (depends on Sprint 1)
+**Size:** M (partly done: Sprint 1 put the email-reminder controls on the profile page)
 
 **Problem.** There is no settings page: the profile page edits demographics only. Sprint 1 adds the nudge controls (email opt-in, timezone, preferred send hour; see `docs/adr-nudges.md`) and may expose them minimally; there is still no way to change display name, email or password, or delete the account.
 
@@ -122,7 +135,7 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 ---
 
 ## 9. Email verification
-**Size:** M
+**Size:** M · **In progress (Sprint 2)**
 
 **Problem.** `User.emailVerified` exists but nothing ever sets it: there is no verification flow, so every user is unverified. Once nudges send real email (Sprint 1), sending to unverified addresses risks mail to typo'd or someone else's addresses, spam complaints and damage to the sending domain's reputation.
 
@@ -144,7 +157,65 @@ Issue-ready items not scheduled for Sprint 1 (nudges). Each item has a problem s
 
 ---
 
+## 11. Admin view of dead-lettered nudges
+**Size:** S (added after Sprint 1)
+
+**Problem.** A nudge that fails `NUDGE_MAX_ATTEMPTS` times ends `FAILED` (dead letter). Today the only signs are a log line and the count in `scripts/doctor.sh`; nobody is alerted and there is no way to inspect or retry one. Once real email is on, provider outages or bad addresses would go unnoticed.
+
+**Acceptance criteria**
+- An admin-only endpoint (and minimal page or CLI) listing `FAILED` nudges with `lastError`, attempts and user, newest first; a retry action that returns one to `PENDING` with attempts reset.
+- Admin authorization defined first (there is no admin role yet): a decision recorded in an ADR.
+- Tests for authorization and retry.
+
+---
+
+## 12. Pending email change (confirm before switching)
+**Size:** M (added in Sprint 2, decision Q3)
+
+**Problem.** `PUT /api/users/me/email` changes the address at once and answers 409 when the new address belongs to another account. That reveals that the address is registered, though only to a signed-in user who knows their password, at most 5 times an hour.
+
+**Acceptance criteria**
+- The new address is stored as pending; the account keeps its current, verified address until the link sent to the new one is confirmed.
+- The response is the same whether or not the new address is taken; a taken address gets a "someone tried to use this address" notice instead of a link.
+- The old address is notified when the change completes; pending changes expire with the link (24 h).
+
+---
+
+## 13. Rename the email provider settings to `EMAIL_*`
+**Size:** S (added in Sprint 2, decision Q5)
+
+**Problem.** Account emails (verification, notices) use the nudge settings `NUDGE_EMAIL_PROVIDER`, `NUDGE_FROM_EMAIL`, `NUDGE_POSTAL_ADDRESS` and `RESEND_API_KEY`; the names suggest they only affect nudges.
+
+**Acceptance criteria**
+- `EMAIL_PROVIDER`, `EMAIL_FROM`, `EMAIL_POSTAL_ADDRESS` (and `RESEND_API_KEY`), with the `NUDGE_*` names still read as fallbacks for one release and a startup warning when they are used.
+- `.env.example`, CLAUDE.md, the smoke-test steps and `doctor.sh` updated.
+
+---
+
+## 14. Opt-in prompt follow-ups from the Sprint 2 review
+**Size:** S (reviewer findings on the "No thanks" prompt, accepted as deferred)
+
+- **The prompt never shows for a product whose first review is at a later stage.** `WriteReviewPage` sets `firstReview` only for an `INITIAL` review, but the API accepts a thread that starts at a later stage. Decide whether "first review of a product" means the first review of any stage, and test it.
+- **One test cannot fail:** `rejects {"nudgePromptDismissedAt": null}` in `backend/tests/nudges/api.test.ts` already passed before the field existed (the schema is `.strict()`). Keep it as a guard, but add a test that fails without the dismiss endpoint's own rules if there is a gap.
+- **No test for a failed decline:** the button should come back, the error show, and the prompt stay.
+- **Duplicated error message:** if both the opt-in and the decline fail, "Could not save" shows twice; after a successful decline, a short "You can turn reminders on in your profile" would help.
+
+---
+
+## 15. Unverified accounts can squat an address
+**Size:** M (Sprint 2 reviewer finding)
+
+**Problem.** Anyone can register `victim@example.com` with their own password; the account stays unverified indefinitely. When the real owner registers later they get the same 202 and a "someone tried to sign up" email, but cannot sign in (no password reset exists), so the address is effectively taken.
+
+**Acceptance criteria**
+- Unverified accounts with no activity expire after N days (decision needed), and/or a password-reset flow via the address takes ownership (verifying the address proves it).
+- The "someone tried to sign up" email points to that recovery path.
+- Tests for both; no change to the no-enumeration guarantees.
+
+---
+
 ## Also noted (smaller, not yet itemized)
+- Sprint 1 leftovers: the dashboard progress bar shows `TWO_WEEKS` grey on legacy threads that have a hand-written `ONE_MONTH` review (cosmetic); the frontend does not zod-validate `GET /api/config` (no zod dependency in the frontend).
 - The CI Postgres service container's healthcheck still uses socket-based `pg_isready` (the dev compose file was fixed in PR #4); harmless so far because Jest's `globalSetup` migrates first and fails loudly.
 - The frontend production build warns about a chunk over 500 kB; route-level code splitting would fix it.
 - `npm ci` warns that ESLint 9 is no longer supported; plan the ESLint 10 upgrade.

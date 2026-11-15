@@ -28,17 +28,23 @@ model User {
   emailVerified Boolean  @default(false)
 
   // Nudge preferences (docs/adr-nudges.md D5). Email is opt-in: off until the user turns it on.
-  emailNudgesEnabled     Boolean   @default(false)
-  emailNudgesConsentAt   DateTime?
-  timezone               String    @default("UTC") // IANA name, e.g. "Europe/Berlin"
-  nudgeSendHour          Int       @default(9) // 0-23, local to `timezone`
+  emailNudgesEnabled        Boolean   @default(false)
+  emailNudgesConsentAt      DateTime?
+  timezone                  String    @default("UTC") // IANA name, e.g. "Europe/Berlin"
+  nudgeSendHour             Int       @default(9) // 0-23, local to `timezone`
   // The user declined the post-first-review email prompt; it is never shown again (profile settings still work).
-  nudgePromptDismissedAt DateTime?
+  nudgePromptDismissedAt    DateTime?
+  // First time the user turned email reminders on (any path); never cleared, so an opt-out (profile or
+  // unsubscribe link) does not bring the opt-in prompt back.
+  emailNudgesFirstEnabledAt DateTime?
+  // When the address was last verified (docs/adr-email-verification.md); emailVerified stays the gate.
+  emailVerifiedAt           DateTime?
 
-  demographics  UserDemographics?
-  reviewThreads ReviewThread[]
-  refreshTokens RefreshToken[]
-  nudges        Nudge[]
+  demographics       UserDemographics?
+  reviewThreads      ReviewThread[]
+  refreshTokens      RefreshToken[]
+  nudges             Nudge[]
+  verificationTokens EmailVerificationToken[]
 
   @@map("users")
 }
@@ -342,4 +348,42 @@ enum NudgeEndReason {
   REVIEW_SUBMITTED
   SUPERSEDED
   USER_SKIPPED
+}
+
+// Email verification links (docs/adr-email-verification.md D1). The link carries the id (selector) and a
+// 32-byte random verifier; only sha256(verifier) is stored. Single use, 24 h, superseded by newer tokens.
+model EmailVerificationToken {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email        String // the (normalized) address this token verifies; must still be the user's address
+  tokenHash    String // hex sha256(verifier); never the verifier itself
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime
+  usedAt       DateTime?
+  supersededAt DateTime?
+
+  @@index([userId, createdAt])
+  @@map("email_verification_tokens")
+}
+
+enum EmailRateKind {
+  VERIFICATION_EMAIL // key: sha256(normalized address)
+  SIGNUP_ATTEMPT_EMAIL // key: sha256(normalized address)
+  EMAIL_CHANGE_ATTEMPT // key: user id
+}
+
+// Rate-limit events stored in the database, so limits hold across processes and restarts and work for
+// addresses that have no user (docs/adr-email-verification.md D4).
+model EmailRateEvent {
+  id        String        @id @default(cuid())
+  kind      EmailRateKind
+  key       String
+  createdAt DateTime      @default(now())
+  /// When the provider accepted the email. Address slots whose email was never sent (the process died
+  /// before sending) stop counting after a few minutes, so a crash cannot block resend for an hour.
+  sentAt    DateTime?
+
+  @@index([kind, key, createdAt])
+  @@map("email_rate_events")
 }

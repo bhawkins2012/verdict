@@ -1,5 +1,6 @@
 import { api, bearer, cleanup, registerUser, uniqueUser } from './helpers'
 import { prisma } from '../src/lib/prisma'
+import { flushAccountEmails } from '../src/auth/mailer'
 
 const createdUserIds: string[] = []
 
@@ -9,27 +10,35 @@ afterAll(async () => {
 })
 
 describe('POST /api/auth/register', () => {
-  it('creates a user and returns tokens', async () => {
+  it('creates an unverified user, returns 202 without tokens, and the user can then sign in', async () => {
     const user = uniqueUser()
     const res = await api().post('/api/auth/register').send(user)
 
-    expect(res.status).toBe(201)
-    expect(res.body.user).toMatchObject({ email: user.email, username: user.username })
-    expect(res.body.accessToken).toEqual(expect.any(String))
-    expect(res.body.refreshToken).toEqual(expect.any(String))
-    expect(res.body.user.passwordHash).toBeUndefined()
-    createdUserIds.push(res.body.user.id)
+    expect(res.status).toBe(202)
+    expect(res.body).toEqual({ message: 'Check your email, then sign in.' })
+    expect(res.body.accessToken).toBeUndefined()
+    await flushAccountEmails() // the account is created after the response
+    const created = await prisma.user.findUniqueOrThrow({ where: { email: user.email } })
+    createdUserIds.push(created.id)
+    expect(created.emailVerified).toBe(false)
+
+    const login = await api().post('/api/auth/login').send({ email: user.email, password: user.password })
+    expect(login.status).toBe(200)
+    expect(login.body.user.passwordHash).toBeUndefined()
   })
 
-  it('rejects a duplicate email or username with 409', async () => {
+  it('a taken username is 409; a taken email is NOT (same 202 as a new one, see verification tests)', async () => {
     const existing = await registerUser()
     createdUserIds.push(existing.id)
 
-    const sameEmail = await api().post('/api/auth/register').send({ ...uniqueUser(), email: existing.email })
     const sameUsername = await api().post('/api/auth/register').send({ ...uniqueUser(), username: existing.username })
-
-    expect(sameEmail.status).toBe(409)
     expect(sameUsername.status).toBe(409)
+    expect(sameUsername.body).toEqual({ error: 'Username already taken' })
+
+    const sameEmail = await api().post('/api/auth/register').send({ ...uniqueUser(), email: existing.email })
+    expect(sameEmail.status).toBe(202)
+    await flushAccountEmails()
+    expect(await prisma.user.count({ where: { email: existing.email } })).toBe(1)
   })
 
   it.each([
