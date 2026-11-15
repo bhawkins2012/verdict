@@ -260,15 +260,15 @@ Update demographic profile.
 
 ### GET /users/me/notification-settings *(auth)*
 ```json
-{ "emailNudgesEnabled": false, "emailNudgesConsentAt": null, "timezone": "UTC", "nudgeSendHour": 9, "emailVerified": false, "nudgePromptDismissedAt": null }
+{ "emailNudgesEnabled": false, "emailNudgesConsentAt": null, "timezone": "UTC", "nudgeSendHour": 9, "emailVerified": false, "nudgePromptDismissedAt": null, "emailNudgesFirstEnabledAt": null }
 ```
-`nudgePromptDismissedAt` is set when the user declined the post-first-review opt-in prompt (see below).
+`nudgePromptDismissedAt` is set when the user declined the post-first-review opt-in prompt (see below). `emailNudgesFirstEnabledAt` is set the first time email reminders are turned on and never cleared (opting out keeps it).
 
 ### PUT /users/me/notification-settings *(auth)*
 Any subset of `{ "emailNudgesEnabled": boolean, "timezone": "Europe/Berlin", "nudgeSendHour": 0-23 }`. Turning email on records `emailNudgesConsentAt`; turning it off clears it. `timezone` must be an IANA name (400 otherwise). Changing the time zone or hour moves pending nudges to the new local send time. Unknown fields → 400, including `nudgePromptDismissedAt`: this endpoint never sets or clears a declined prompt, so opting in or out here later leaves it as it is.
 
 ### POST /users/me/nudge-prompt/dismiss *(auth)*
-The user declined the email opt-in prompt ("No thanks, don't ask again"). Sets `nudgePromptDismissedAt` to now if it is not set yet (a repeat keeps the first time) and changes nothing else. Returns the notification settings. The frontend shows the prompt after the first review of each product only while `emailNudgesEnabled` is false and `nudgePromptDismissedAt` is null.
+The user declined the email opt-in prompt ("No thanks, don't ask again"). Sets `nudgePromptDismissedAt` to now if it is not set yet (a repeat keeps the first time) and changes nothing else. Returns the notification settings. The frontend shows the prompt after the first review of each product only while the user has never opted in (`emailNudgesFirstEnabledAt` is null) and has not declined (`nudgePromptDismissedAt` is null).
 
 ---
 
