@@ -46,7 +46,7 @@ export function renderSignupAttemptEmail(input: { to: string; loginUrl: string; 
     subject: 'Someone tried to create a Verdict account with your email',
     paragraphs: [
       'Someone tried to create a new Verdict account with this email address, which already has an account.',
-      'If it was you, just sign in. If it wasn\'t, you can ignore this email: nothing was changed.',
+      'If it was you, sign in with your existing account. If it wasn\'t, nothing was changed. If you never created a Verdict account and cannot sign in, someone may have used your address: contact support.',
     ],
     link: { href: input.loginUrl, label: 'Sign in to Verdict' },
     idempotencyKey: `signup-attempt/${input.eventId}`,

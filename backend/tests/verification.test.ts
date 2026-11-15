@@ -4,9 +4,10 @@ import type { Express } from 'express'
 import request from 'supertest'
 import { prisma } from '../src/lib/prisma'
 import { addressKey } from '../src/auth/emailAddress'
-import { claimAddressSlot, takeEmailChangeAttempt } from '../src/auth/emailLimits'
-import { flushAccountEmails, setTransactionalProviderForTests } from '../src/auth/mailer'
-import { consumeVerificationToken, issueVerificationToken, TOKEN_TTL_MS } from '../src/auth/verificationTokens'
+import { claimAddressSlot, markSlotSent, takeEmailChangeAttempt, UNSENT_SLOT_GRACE_MS } from '../src/auth/emailLimits'
+import { afterResponse, flushAccountEmails, setTransactionalProviderForTests } from '../src/auth/mailer'
+import { AddressChangedError, consumeVerificationToken, issueVerificationToken, TOKEN_TTL_MS } from '../src/auth/verificationTokens'
+import { logger } from '../src/lib/logger'
 import { EmailMessage, EmailProvider } from '../src/nudges/providers'
 import { processNudge } from '../src/nudges/sender'
 import { syncThreadNudges } from '../src/nudges/lifecycle'
@@ -145,7 +146,7 @@ describe('no account enumeration', () => {
     }
     const runs: { known: number[]; unknown: number[] } = { known: [], unknown: [] }
     let knownRes, unknownRes
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       const k = await time(known.email.toUpperCase()) // any case, any spacing: the same account
       const n = await time(uniqueUser().email)
       knownRes = k.res
@@ -154,18 +155,24 @@ describe('no account enumeration', () => {
       runs.unknown.push(n.ms)
     }
     for (const u of await prisma.user.findMany({ where: { email: { startsWith: 't_' } }, select: { id: true } })) userIds.push(u.id)
-    expect(hash).toHaveBeenCalledTimes(6)
+    expect(hash).toHaveBeenCalledTimes(10)
     hash.mockRestore()
+    await flushAccountEmails()
+    for (const u of await prisma.user.findMany({ where: { email: { startsWith: 't_' } }, select: { id: true } })) userIds.push(u.id)
 
     expect(knownRes?.status).toBe(202)
     expect(unknownRes?.status).toBe(202)
     expect(knownRes?.body).toEqual(unknownRes?.body)
-    expect(Object.keys(knownRes?.headers ?? {}).sort()).toEqual(Object.keys(unknownRes?.headers ?? {}).sort())
-    // Loose timing check: bcrypt dominates both paths; medians within a factor of 2.
-    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[1]
+    // Headers, values included, apart from the ones that vary per response.
+    const stable = (h: Record<string, string> | undefined) =>
+      Object.fromEntries(Object.entries(h ?? {}).filter(([k]) => !['date', 'etag'].includes(k) && !k.startsWith('ratelimit')))
+    expect(stable(knownRes?.headers)).toEqual(stable(unknownRes?.headers))
+    // Timing: before the response both paths do the same work (username check + bcrypt); the email
+    // lookup and account creation happen after it. Medians of 5 within a factor of 1.5.
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[2]
     const ratio = median(runs.known) / median(runs.unknown)
-    expect(ratio).toBeGreaterThan(0.5)
-    expect(ratio).toBeLessThan(2)
+    expect(ratio).toBeGreaterThan(1 / 1.5)
+    expect(ratio).toBeLessThan(1.5)
     // Nothing changed for the known account; its owner got one notice, not a link.
     expect(await prisma.user.count({ where: { email: known.email } })).toBe(1)
     await flushAccountEmails()
@@ -199,6 +206,7 @@ describe('email normalization', () => {
     const u = uniqueUser()
     const res = await api().post('/api/auth/register').send({ ...u, email: `  ${u.email.toUpperCase()} ` })
     expect(res.status).toBe(202)
+    await flushAccountEmails()
     const row = await prisma.user.findUniqueOrThrow({ where: { email: u.email } })
     userIds.push(row.id)
     expect(row.email).toBe(u.email)
@@ -446,5 +454,131 @@ describe('per-IP limits on account-email routes', () => {
     expect(limited.status).toBe(429)
     expect(limited.headers['retry-after']).toBeDefined()
     expect((await hit('198.51.100.8')).status).toBe(400)
+  })
+
+  it.each([
+    ['resend', (token: string, ip: string) => request(app).post('/api/auth/verification/resend').set(bearer(token)).set('X-Forwarded-For', ip)],
+    ['email change', (token: string, ip: string) => request(app).put('/api/users/me/email').set(bearer(token)).set('X-Forwarded-For', ip).send({})],
+  ])('%s: the per-IP limiter answers the third request from one IP', async (_name, hit) => {
+    const u = await newUser()
+    const ip = `198.51.100.${Math.floor(Math.random() * 200) + 20}`
+    await hit(u.accessToken, ip)
+    await hit(u.accessToken, ip)
+    const limited = await hit(u.accessToken, ip)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toEqual({ error: 'Too many requests. Please try again later.' })
+    expect((await hit(u.accessToken, '203.0.113.99')).body).not.toEqual({ error: 'Too many requests. Please try again later.' })
+  })
+})
+
+describe('review findings (Sprint 2 full-diff review)', () => {
+  it('an address slot whose email was never sent stops counting after a few minutes; a sent one lasts the hour', async () => {
+    const address = uniqueUser().email
+    const t0 = new Date()
+    const unsent = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', address, t0) // process "dies" here
+    expect(unsent.allowed).toBe(true)
+    expect((await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', address, new Date(t0.getTime() + 60_000))).allowed).toBe(false)
+    const later = new Date(t0.getTime() + UNSENT_SLOT_GRACE_MS + 60_000)
+    const again = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', address, later)
+    expect(again.allowed).toBe(true)
+    if (again.allowed) await markSlotSent(prisma, again.eventId, later)
+    expect((await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', address, new Date(later.getTime() + 30 * 60_000))).allowed).toBe(false)
+    await prisma.emailRateEvent.deleteMany({ where: { key: addressKey(address) } })
+  })
+
+  it('a delivered email marks its slot sent, so it counts for the whole hour', async () => {
+    const u = await newUser()
+    const [event] = await prisma.emailRateEvent.findMany({ where: { key: addressKey(u.email) } })
+    expect(event.sentAt).toEqual(expect.any(Date))
+    const tenMinutesLater = new Date(Date.now() + UNSENT_SLOT_GRACE_MS + 5 * 60_000)
+    expect((await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', u.email, tenMinutesLater)).allowed).toBe(false)
+  })
+
+  it('a task that throws synchronously (e.g. bad config) is caught, not thrown into the finished request', async () => {
+    const error = jest.spyOn(logger, 'error').mockImplementation(() => logger)
+    expect(() => afterResponse(() => { throw new Error('config broke') })).not.toThrow()
+    await flushAccountEmails()
+    expect(error).toHaveBeenCalledWith('Account email task failed', { error: 'config broke' })
+    error.mockRestore()
+  })
+
+  it('two concurrent registrations of one new address: one account, one verification email, no slot left behind', async () => {
+    const u = uniqueUser()
+    const [a, b] = await Promise.all([
+      api().post('/api/auth/register').send(u),
+      api().post('/api/auth/register').send({ ...uniqueUser(), email: u.email }),
+    ])
+    expect([a.status, b.status]).toEqual([202, 202])
+    await flushAccountEmails()
+    const users = await prisma.user.findMany({ where: { email: u.email } })
+    userIds.push(...users.map((x) => x.id))
+    expect(users).toHaveLength(1)
+    expect(emailsTo(u.email).filter((m) => m.idempotencyKey.startsWith('verify/'))).toHaveLength(1)
+  })
+
+  it('a token is never issued for an address that is no longer the user\'s (resend racing an email change)', async () => {
+    const u = await newUser()
+    await prisma.user.update({ where: { id: u.id }, data: { email: uniqueUser().email } })
+    await expect(prisma.$transaction((tx) => issueVerificationToken(tx, u.id, u.email, new Date()))).rejects.toBeInstanceOf(AddressChangedError)
+  })
+
+  it('verify and email change at the same instant: no deadlock, no 500', async () => {
+    for (let i = 0; i < 3; i++) {
+      const u = await newUser()
+      const link = linkFrom(emailsTo(u.email)[0])
+      const settled = await raceOnTable('users', [
+        () => api().post('/api/auth/verify-email').send(link),
+        () => api().put('/api/users/me/email').set(bearer(u.accessToken)).send({ email: uniqueUser().email, currentPassword: u.password }),
+      ])
+      const statuses = settled.map((r) => (r.status === 'fulfilled' ? r.value.status : 0))
+      expect(statuses).not.toContain(500)
+      expect(statuses[1]).toBe(200)
+    }
+  })
+
+  it('consume and an email-change transaction racing on one user: no deadlock (both lock the user row first)', async () => {
+    for (let i = 0; i < 5; i++) {
+      const u = await newUser()
+      const link = linkFrom(emailsTo(u.email)[0])
+      const next = uniqueUser().email
+      const settled = await raceOnTable<unknown>('users', [
+        () => consumeVerificationToken(prisma, link.id, link.token, new Date()),
+        // What PUT /api/users/me/email does in its transaction.
+        () =>
+          prisma.$transaction(async (tx) => {
+            await tx.user.update({ where: { id: u.id }, data: { email: next, emailVerified: false, emailVerifiedAt: null } })
+            return issueVerificationToken(tx, u.id, next, new Date())
+          }),
+      ])
+      const errors = settled.filter((r) => r.status === 'rejected').map((r) => String((r as PromiseRejectedResult).reason))
+      expect(errors).toEqual([])
+    }
+  })
+
+  it('in dry run outside development/test the verification link is NOT logged', async () => {
+    setTransactionalProviderForTests(null) // the configured dry-run provider
+    const info = jest.spyOn(logger, 'info')
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'staging'
+    try {
+      const u = uniqueUser()
+      await api().post('/api/auth/register').send(u)
+      await flushAccountEmails()
+      const row = await prisma.user.findUniqueOrThrow({ where: { email: u.email } })
+      userIds.push(row.id)
+    } finally {
+      process.env.NODE_ENV = prev
+    }
+    expect(info.mock.calls.some(([msg]) => String(msg).startsWith('Verification link'))).toBe(false)
+    expect(info.mock.calls.some(([msg]) => String(msg) === 'Account email sent')).toBe(true)
+    info.mockRestore()
+  })
+
+  it('in development/test the dry-run link is logged', async () => {
+    setTransactionalProviderForTests(null)
+    const info = jest.spyOn(logger, 'info')
+    await newUser()
+    expect(info.mock.calls.some(([msg]) => String(msg).startsWith('Verification link'))).toBe(true)
+    info.mockRestore()
   })
 })

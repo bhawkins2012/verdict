@@ -2,6 +2,7 @@ import request from 'supertest'
 import { randomUUID } from 'crypto'
 import { app } from '../src/app'
 import { prisma } from '../src/lib/prisma'
+import { flushAccountEmails } from '../src/auth/mailer'
 
 export const api = () => request(app)
 
@@ -15,6 +16,7 @@ export async function registerUser() {
   const user = uniqueUser()
   const reg = await api().post('/api/auth/register').send(user)
   if (reg.status !== 202) throw new Error(`register failed: ${reg.status} ${JSON.stringify(reg.body)}`)
+  await flushAccountEmails() // the account is created after the response
   const res = await api().post('/api/auth/login').send({ email: user.email, password: user.password })
   if (res.status !== 200) throw new Error(`login failed: ${res.status} ${JSON.stringify(res.body)}`)
   return { ...user, id: res.body.user.id as string, accessToken: res.body.accessToken as string, refreshToken: res.body.refreshToken as string }

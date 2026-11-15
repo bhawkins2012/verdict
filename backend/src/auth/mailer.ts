@@ -10,7 +10,8 @@ import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
 import { loadNudgeConfig } from '../nudges/config'
 import { createProvider, EmailMessage, EmailProvider } from '../nudges/providers'
-import { releaseSlot } from './emailLimits'
+import { isDevEnvironment } from '../middleware/devOnly'
+import { markSlotSent, releaseSlot } from './emailLimits'
 import { renderVerificationEmail } from './emails'
 import { IssuedToken, verificationLink } from './verificationTokens'
 
@@ -36,8 +37,11 @@ export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, s
   try {
     const { providerMessageId } = await provider.send(message)
     logger.info('Account email sent', { kind, provider: provider.name, providerMessageId, idempotencyKey: message.idempotencyKey })
-    if (!provider.real && kind === 'verification') {
-      // Dry run: make the link easy to find in the logs (also served by GET /api/auth/dev/verification-link).
+    if (slotEventId) await markSlotSent(prisma, slotEventId, new Date()).catch(() => undefined)
+    if (!provider.real && kind === 'verification' && isDevEnvironment()) {
+      // Dry run in development/test only: make the link easy to find in the logs (also served by
+      // GET /api/auth/dev/verification-link). Never elsewhere: a log line with a live token would let
+      // anyone who can read the logs verify the address.
       logger.info('Verification link (dry run, not sent)', { to: message.to, link: message.text.match(/https?:\/\/\S+\/verify-email#\S+/)?.[0] })
     }
     return true
@@ -56,7 +60,10 @@ export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, s
 const inFlight = new Set<Promise<unknown>>()
 
 export function afterResponse(task: () => Promise<unknown>): void {
-  const p: Promise<unknown> = task()
+  // Promise.resolve().then: a synchronous throw inside the task (e.g. invalid config) is caught here too,
+  // instead of escaping into a route whose response was already sent.
+  const p: Promise<unknown> = Promise.resolve()
+    .then(task)
     .catch((err) => logger.error('Account email task failed', { error: err instanceof Error ? err.message : String(err) }))
     .finally(() => inFlight.delete(p))
   inFlight.add(p)
@@ -64,6 +71,15 @@ export function afterResponse(task: () => Promise<unknown>): void {
 
 export async function flushAccountEmails(): Promise<void> {
   while (inFlight.size > 0) await Promise.all([...inFlight])
+}
+
+/** On shutdown: give in-flight account emails up to `timeoutMs` to finish. */
+export async function drainAccountEmails(timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<false>((r) => (timer = setTimeout(() => r(false), timeoutMs)))
+  const done = await Promise.race([flushAccountEmails().then(() => true as const), timeout])
+  clearTimeout(timer)
+  return done
 }
 
 export function accountEmailSettings() {

@@ -4,7 +4,12 @@
 import { NextFunction, Request, Response } from 'express'
 import { AppError } from './errorHandler'
 
+/** NODE_ENV is development or test (an allow-list: unset, staging or a typo are not). */
+export function isDevEnvironment(): boolean {
+  return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
+}
+
 export function devOnly(_req: Request, _res: Response, next: NextFunction): void {
-  if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') throw new AppError(404, 'Not found')
+  if (!isDevEnvironment()) throw new AppError(404, 'Not found')
   next()
 }

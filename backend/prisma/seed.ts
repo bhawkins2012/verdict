@@ -8,7 +8,7 @@ async function main() {
   console.log('🌱 Seeding database...')
 
   // ── Users ──────────────────────────────────────────────
-  const passwordHash = await bcrypt.hash('password123', 10)
+  const passwordHash = await bcrypt.hash('password123', 12) // same cost as register and the login dummy hash
 
   const alice = await prisma.user.upsert({
     where: { email: 'alice@example.com' },

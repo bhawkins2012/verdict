@@ -10,15 +10,34 @@ export const ADDRESS_WINDOW_MS = 60 * 60 * 1000
 /** Email-change attempts per user per hour (right or wrong password). */
 export const EMAIL_CHANGE_ATTEMPTS_PER_HOUR = 5
 const HOUR_MS = 60 * 60 * 1000
+/**
+ * An address slot whose email was never marked sent (the process died between claiming it and sending)
+ * stops counting after this long, so a crash cannot block Resend for the rest of the hour.
+ */
+export const UNSENT_SLOT_GRACE_MS = 5 * 60 * 1000
 
 export type Limited = { allowed: true; eventId: string } | { allowed: false; retryAfterSeconds: number }
 
-async function take(db: PrismaClient, kind: EmailRateKind, key: string, max: number, windowMs: number, now: Date): Promise<Limited> {
+async function take(
+  db: PrismaClient,
+  kind: EmailRateKind,
+  key: string,
+  max: number,
+  windowMs: number,
+  now: Date,
+  opts: { onlySent?: boolean } = {}
+): Promise<Limited> {
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`email-rate:${kind}:${key}`}))`
     const since = new Date(now.getTime() - windowMs)
     const recent = await tx.emailRateEvent.findMany({
-      where: { kind, key, createdAt: { gt: since } },
+      where: {
+        kind,
+        key,
+        createdAt: { gt: since },
+        // Address slots: sent emails, or sends still in flight (claimed in the last few minutes).
+        ...(opts.onlySent ? { OR: [{ sentAt: { not: null } }, { createdAt: { gt: new Date(now.getTime() - UNSENT_SLOT_GRACE_MS) } }] } : {}),
+      },
       orderBy: { createdAt: 'asc' },
       select: { createdAt: true },
     })
@@ -38,7 +57,12 @@ export function claimAddressSlot(
   email: string,
   now: Date
 ): Promise<Limited> {
-  return take(db, kind, addressKey(email), 1, ADDRESS_WINDOW_MS, now)
+  return take(db, kind, addressKey(email), 1, ADDRESS_WINDOW_MS, now, { onlySent: true })
+}
+
+/** The provider accepted the email: the slot now counts for the full hour. */
+export async function markSlotSent(db: PrismaClient, eventId: string, at: Date): Promise<void> {
+  await db.emailRateEvent.updateMany({ where: { id: eventId }, data: { sentAt: at } })
 }
 
 /** Give a slot back (the provider did not accept the email), so the user can try again at once. */

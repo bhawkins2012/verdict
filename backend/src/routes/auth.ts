@@ -11,11 +11,11 @@ import { devOnly } from '../middleware/devOnly'
 import { logger } from '../lib/logger'
 import { dryRunOutbox } from '../nudges/providers'
 import { emailField, maskEmail } from '../auth/emailAddress'
-import { claimAddressSlot } from '../auth/emailLimits'
+import { claimAddressSlot, releaseSlot } from '../auth/emailLimits'
 import { renderSignupAttemptEmail } from '../auth/emails'
 import { ipLimiter, tooManyRequests } from '../auth/ipLimits'
 import { accountEmailSettings, afterResponse, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
-import { consumeVerificationToken, issueVerificationToken } from '../auth/verificationTokens'
+import { AddressChangedError, consumeVerificationToken, issueVerificationToken } from '../auth/verificationTokens'
 
 export const authRouter = Router()
 
@@ -79,8 +79,10 @@ function signTokens(userId: string) {
   return { accessToken, refreshToken }
 }
 
-// POST /api/auth/register: the same 202 for a new and an already-registered address, and the same work
-// (password hash, one email after the response) on both paths. No tokens: the user signs in afterwards.
+// POST /api/auth/register: the same 202 for a new and an already-registered address. Before the
+// response both paths do exactly the same work (validate, username check, password hash); looking up the
+// email, creating the account and sending the email all happen after it, so neither the answer nor its
+// timing depends on whether the address is registered. No tokens: the user signs in afterwards.
 authRouter.post('/register', registerLimiter, async (req: Request, res: Response) => {
   const body = registerSchema.safeParse(req.body)
   if (!body.success) throw new AppError(400, body.error.errors[0].message)
@@ -91,30 +93,50 @@ authRouter.post('/register', registerLimiter, async (req: Request, res: Response
   if (await prisma.user.findUnique({ where: { username }, select: { id: true } })) {
     throw new AppError(409, 'Username already taken')
   }
-
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
-  const now = new Date()
-  let task: (() => Promise<unknown>) | null
-  if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) {
-    task = await signupAttemptTask(email, now)
-  } else {
-    try {
-      const slot = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', email, now)
-      const token = await prisma.$transaction(async (tx) => {
-        const user = await tx.user.create({ data: { email, username, passwordHash, displayName }, select: { id: true } })
-        return issueVerificationToken(tx, user.id, email, now)
-      })
-      task = slot.allowed ? verificationEmailTask(token, email, slot.eventId) : null
-    } catch (e) {
-      if (!isUniqueViolation(e)) throw e
-      if (onUsername(e)) throw new AppError(409, 'Username already taken')
-      task = await signupAttemptTask(email, now) // the address was registered concurrently
-    }
-  }
 
   res.status(202).json(REGISTER_ACCEPTED)
-  if (task) afterResponse(task)
+  afterResponse(() => completeRegistration({ email, username, passwordHash, displayName }, new Date()))
 })
+
+/**
+ * After the 202: create the account and email a link, or tell the owner of an existing address. The
+ * per-address slot is claimed only after the account exists, so a failed or raced insert never holds it.
+ */
+async function completeRegistration(
+  input: { email: string; username: string; passwordHash: string; displayName: string | undefined },
+  now: Date
+): Promise<unknown> {
+  if (await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } })) {
+    const notice = await signupAttemptTask(input.email, now)
+    return notice?.()
+  }
+  let token
+  try {
+    token = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { email: input.email, username: input.username, passwordHash: input.passwordHash, displayName: input.displayName },
+        select: { id: true },
+      })
+      return issueVerificationToken(tx, user.id, input.email, now)
+    })
+  } catch (e) {
+    if (!isUniqueViolation(e)) throw e
+    if (onUsername(e)) {
+      // The username was taken between the check and the insert; nothing was created.
+      logger.warn('Registration lost a username race; no account created', { username: input.username })
+      return undefined
+    }
+    const notice = await signupAttemptTask(input.email, now) // the address was registered concurrently
+    return notice?.()
+  }
+  const slot = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', input.email, now)
+  if (!slot.allowed) {
+    logger.info('Verification email skipped: one was sent to this address in the last hour', { tokenId: token.id })
+    return undefined
+  }
+  return verificationEmailTask(token, input.email, slot.eventId)()
+}
 
 // POST /api/auth/login
 authRouter.post('/login', async (req: Request, res: Response) => {
@@ -209,10 +231,14 @@ authRouter.get('/me', authenticate, async (req: Request, res: Response) => {
 })
 
 // POST /api/auth/verify-email { id, token }: no login needed (the link may be opened on another device).
-// Every failure gets the same answer; the reason is logged.
+// Every failure gets the same answer, including a malformed body; the reason is logged.
+const verifySchema = z.object({ id: z.string().min(1).max(64), token: z.string().min(1).max(128) })
 authRouter.post('/verify-email', verifyLimiter, async (req: Request, res: Response) => {
-  const { id, token } = (req.body ?? {}) as { id?: unknown; token?: unknown }
-  const result = await consumeVerificationToken(prisma, id, token, new Date())
+  const body = verifySchema.safeParse(req.body)
+  const result = body.success
+    ? await consumeVerificationToken(prisma, body.data.id, body.data.token, new Date())
+    : ({ ok: false, reason: 'malformed' } as const)
+  const id = body.success ? body.data.id : undefined
   if (!result.ok) {
     logger.info('Email verification failed', { reason: result.reason, tokenId: typeof id === 'string' ? id.slice(0, 64) : undefined })
     throw new AppError(400, INVALID_LINK)
@@ -245,7 +271,14 @@ authRouter.post('/verification/resend', authenticate, resendLimiter, async (req:
   if (!slot.allowed) {
     return tooManyRequests(res, slot.retryAfterSeconds, 'We recently sent a link to this address. Please check your inbox or try again later.')
   }
-  const token = await prisma.$transaction((tx) => issueVerificationToken(tx, user.id, user.email, now))
+  let token
+  try {
+    token = await prisma.$transaction((tx) => issueVerificationToken(tx, user.id, user.email, now))
+  } catch (e) {
+    await releaseSlot(prisma, slot.eventId)
+    if (e instanceof AddressChangedError) throw new AppError(409, 'Your email address just changed. Reload the page to send a link to the new address.')
+    throw e
+  }
   res.status(202).json({ sentTo: maskEmail(user.email), sentAt: now })
   afterResponse(verificationEmailTask(token, user.email, slot.eventId))
 })

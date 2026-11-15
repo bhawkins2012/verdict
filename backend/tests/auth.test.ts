@@ -1,5 +1,6 @@
 import { api, bearer, cleanup, registerUser, uniqueUser } from './helpers'
 import { prisma } from '../src/lib/prisma'
+import { flushAccountEmails } from '../src/auth/mailer'
 
 const createdUserIds: string[] = []
 
@@ -16,6 +17,7 @@ describe('POST /api/auth/register', () => {
     expect(res.status).toBe(202)
     expect(res.body).toEqual({ message: 'Check your email, then sign in.' })
     expect(res.body.accessToken).toBeUndefined()
+    await flushAccountEmails() // the account is created after the response
     const created = await prisma.user.findUniqueOrThrow({ where: { email: user.email } })
     createdUserIds.push(created.id)
     expect(created.emailVerified).toBe(false)
@@ -35,6 +37,7 @@ describe('POST /api/auth/register', () => {
 
     const sameEmail = await api().post('/api/auth/register').send({ ...uniqueUser(), email: existing.email })
     expect(sameEmail.status).toBe(202)
+    await flushAccountEmails()
     expect(await prisma.user.count({ where: { email: existing.email } })).toBe(1)
   })
 
