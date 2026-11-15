@@ -67,6 +67,22 @@ describe('skip and snooze', () => {
     expect((await prisma.nudge.findMany({ where: { threadId: n.threadId, status: 'PENDING' } })).map((x) => x.targetStage)).toEqual(['THREE_MONTHS'])
   })
 
+  it("the thread's nextCheckIn comes from the planner: 2 weeks, then 3 months once 2 weeks is skipped; overdue collapse", async () => {
+    const u = await apiUser()
+    const n = await nudgeFor(u.id, 1)
+    const thread = await prisma.reviewThread.findUniqueOrThrow({ where: { id: n.threadId } })
+    const get = () => api().get(`/api/reviews/thread/${thread.productId}`).set(bearer(u.accessToken))
+
+    expect((await get()).body.nextCheckIn).toMatchObject({ stage: 'TWO_WEEKS' })
+    await api().post(`/api/nudges/${n.id}/skip`).set(bearer(u.accessToken))
+    expect((await get()).body.nextCheckIn).toMatchObject({ stage: 'THREE_MONTHS' })
+
+    // Only INITIAL, four months ago: 2 weeks and 3 months are both overdue; the planner asks for 3 months.
+    const late = await makeThread(u.id, [{ stage: 'INITIAL', at: new Date(Date.now() - days(120)) }])
+    const res = await api().get(`/api/reviews/thread/${late.productId}`).set(bearer(u.accessToken))
+    expect(res.body.nextCheckIn).toMatchObject({ stage: 'THREE_MONTHS' })
+  })
+
   it('skipping a check-in does not bring back an earlier stage it had superseded', async () => {
     const u = await apiUser()
     // Started 100 days ago: 2 weeks and 3 months are both due; the 3-month check-in supersedes 2 weeks.

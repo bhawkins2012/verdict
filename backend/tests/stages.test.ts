@@ -1,8 +1,8 @@
 import { ReviewStage } from '@prisma/client'
 import request from 'supertest'
 import type { Express } from 'express'
-import { CadenceEntry, consentCopy, NUDGE_CADENCE, STAGE_ORDER, stageRank } from '../src/stages'
-import { addOffset } from '../src/nudges/planner'
+import { CadenceEntry, consentCopy, NUDGE_CADENCE, STAGE_ORDER, stageConfig, stageRank } from '../src/stages'
+import { addOffset, planThreadNudge } from '../src/nudges/planner'
 
 const EXACT_COPY = 'Email me check-ins at 2 weeks, 3 months, 1 year, and 2 years.'
 
@@ -24,6 +24,16 @@ describe('stage order and cadence (single source of truth)', () => {
 
   it('the consent copy is exactly the approved text for the current cadence', () => {
     expect(consentCopy()).toBe(EXACT_COPY)
+  })
+
+  it('the planner and the API use the same cadence: every stage the planner targets, in order, is what /api/config lists', () => {
+    const anchor = new Date('2026-01-10T00:00:00Z')
+    const targets: string[] = []
+    for (let day = 0; day <= 800; day++) {
+      const p = planThreadNudge({ anchor, reviewedStages: ['INITIAL'], latestReviewAt: anchor, skippedStages: [], now: new Date(anchor.getTime() + day * 86_400_000) })
+      if (p && targets[targets.length - 1] !== p.stage) targets.push(p.stage)
+    }
+    expect(targets).toEqual(stageConfig().nudgeCadence.map((c) => c.stage))
   })
 
   it('the consent copy is generated from the cadence it is given', () => {

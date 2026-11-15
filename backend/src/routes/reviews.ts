@@ -7,6 +7,7 @@ import { AppError } from '../middleware/errorHandler'
 import { purchaseDateSchema } from '../lib/purchaseDate'
 import { STAGE_ORDER } from '../stages'
 import { completeNudgesForReview } from '../nudges/lifecycle'
+import { planInputFromRows, planThreadNudge } from '../nudges/planner'
 import { enqueueAfterCommit } from '../nudges/runtime'
 import { computeThreadDrift } from '../services/driftService'
 import { enrichReviewWithNLP, NLPEnrichment } from '../services/mlClient'
@@ -44,7 +45,14 @@ reviewsRouter.get('/thread/:productId', authenticate, async (req: Request, res: 
   })
 
   if (!thread) throw new AppError(404, 'No review thread found for this product')
-  res.json(thread)
+
+  // The next check-in, from the same planner that schedules nudges (skips, overdue collapse and all),
+  // so the thread page's "write your next review" button cannot disagree with the emails.
+  const allNudges = await prisma.nudge.findMany({ where: { threadId: thread.id }, select: { targetStage: true, status: true, sentAt: true } })
+  const plan = planThreadNudge(
+    planInputFromRows({ anchor: thread.purchasedAt ?? thread.startedAt, reviews: thread.reviews, nudges: allNudges, now: new Date() })
+  )
+  res.json({ ...thread, nextCheckIn: plan ? { stage: plan.stage, dueAt: plan.dueAt } : null })
 })
 
 // GET /api/reviews/threads — get all threads for current user
