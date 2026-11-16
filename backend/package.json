@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "predev": "prisma generate",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "prebuild": "prisma generate",
     "build": "tsc",
     "start": "node dist/index.js",
+    "pretest": "prisma generate",
     "test": "jest --runInBand",
     "lint": "eslint src tests prisma",
     "typecheck": "tsc -p tsconfig.check.json",
