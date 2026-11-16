@@ -32,7 +32,19 @@ export type EmailKind = 'verification' | 'signup-attempt' | 'email-changed'
  * Send one account email. `slotEventId` is the per-address rate-limit event claimed before the email was
  * prepared; it is released if the provider does not accept the message.
  */
-export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, slotEventId?: string): Promise<boolean> {
+/** Which after-response task failed, for whom: logged with every failure (never the address or a token). */
+export interface TaskContext {
+  task: 'registration' | 'verification-email' | 'signup-attempt-email' | 'email-changed-email'
+  userId?: string
+}
+
+/** "TypeError", "PrismaClientKnownRequestError", "EmailProviderError", ... */
+export function errorClass(err: unknown): string {
+  if (err instanceof Error) return err.constructor?.name || err.name
+  return typeof err
+}
+
+export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, slotEventId?: string, userId?: string): Promise<boolean> {
   const provider = transactionalProvider()
   try {
     const { providerMessageId } = await provider.send(message)
@@ -47,7 +59,8 @@ export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, s
     return true
   } catch (err) {
     logger.error('Account email failed; the user can resend', {
-      kind, provider: provider.name, idempotencyKey: message.idempotencyKey, error: err instanceof Error ? err.message : String(err),
+      kind, userId, provider: provider.name, idempotencyKey: message.idempotencyKey, errorClass: errorClass(err),
+      error: err instanceof Error ? err.message : String(err),
     })
     if (slotEventId) await releaseSlot(prisma, slotEventId).catch(() => undefined)
     return false
@@ -59,12 +72,17 @@ export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, s
 // timing, D3). Tests await them with flushAccountEmails().
 const inFlight = new Set<Promise<unknown>>()
 
-export function afterResponse(task: () => Promise<unknown>): void {
+export function afterResponse(context: TaskContext, task: () => Promise<unknown>): void {
   // Promise.resolve().then: a synchronous throw inside the task (e.g. invalid config) is caught here too,
-  // instead of escaping into a route whose response was already sent.
+  // instead of escaping into a route whose response was already sent. A failure never changes the
+  // response (it has been sent); it is logged with the task, the user id and the error class.
   const p: Promise<unknown> = Promise.resolve()
     .then(task)
-    .catch((err) => logger.error('Account email task failed', { error: err instanceof Error ? err.message : String(err) }))
+    .catch((err) =>
+      logger.error('Account email task failed', {
+        task: context.task, userId: context.userId, errorClass: errorClass(err), error: err instanceof Error ? err.message : String(err),
+      })
+    )
     .finally(() => inFlight.delete(p))
   inFlight.add(p)
 }
@@ -88,11 +106,11 @@ export function accountEmailSettings() {
 }
 
 /** The task that emails a verification link (run after the response). */
-export function verificationEmailTask(token: Pick<IssuedToken, 'id' | 'verifier'>, to: string, slotEventId: string | null) {
+export function verificationEmailTask(token: Pick<IssuedToken, 'id' | 'verifier'>, to: string, slotEventId: string | null, userId?: string) {
   return () => {
     const settings = accountEmailSettings()
     const message = renderVerificationEmail({ to, link: verificationLink(settings.frontendUrl, token), tokenId: token.id }, settings)
-    return sendAccountEmail('verification', message, slotEventId ?? undefined)
+    return sendAccountEmail('verification', message, slotEventId ?? undefined, userId)
   }
 }
 

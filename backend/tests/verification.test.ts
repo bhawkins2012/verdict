@@ -496,9 +496,9 @@ describe('review findings (Sprint 2 full-diff review)', () => {
 
   it('a task that throws synchronously (e.g. bad config) is caught, not thrown into the finished request', async () => {
     const error = jest.spyOn(logger, 'error').mockImplementation(() => logger)
-    expect(() => afterResponse(() => { throw new Error('config broke') })).not.toThrow()
+    expect(() => afterResponse({ task: 'registration' }, () => { throw new Error('config broke') })).not.toThrow()
     await flushAccountEmails()
-    expect(error).toHaveBeenCalledWith('Account email task failed', { error: 'config broke' })
+    expect(error).toHaveBeenCalledWith('Account email task failed', { task: 'registration', userId: undefined, errorClass: 'Error', error: 'config broke' })
     error.mockRestore()
   })
 

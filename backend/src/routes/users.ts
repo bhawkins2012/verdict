@@ -14,8 +14,10 @@ import { emailField, maskEmail } from '../auth/emailAddress'
 import { claimAddressSlot, releaseSlot, takeEmailChangeAttempt } from '../auth/emailLimits'
 import { renderEmailChangedEmail } from '../auth/emails'
 import { ipLimiter, tooManyRequests } from '../auth/ipLimits'
-import { afterResponse, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
-import { issueVerificationToken } from '../auth/verificationTokens'
+import { afterResponse, errorClass, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
+import { issueVerificationToken, supersedeTokens } from '../auth/verificationTokens'
+import { logger } from '../lib/logger'
+import { randomUUID } from 'crypto'
 
 export const usersRouter = Router()
 
@@ -185,23 +187,33 @@ usersRouter.put('/me/email', authenticate, emailChangeLimiter, async (req: Reque
   if (!slot.allowed) {
     return tooManyRequests(res, slot.retryAfterSeconds, 'We recently sent a link to that address. Please try again later.')
   }
-  let token
+  // 1. The change itself, committed on its own: new address, unverified, every older link void.
   try {
-    token = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: userId }, data: { email, emailVerified: false, emailVerifiedAt: null } })
-      return issueVerificationToken(tx, userId, email, now) // also supersedes every older link
+      await supersedeTokens(tx, userId, now)
     })
   } catch (e) {
     await releaseSlot(prisma, slot.eventId)
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new AppError(409, 'That email address is already in use')
     throw e
   }
+  // 2. The email path. A failure here never undoes the change (the user sees the banner and can resend).
+  let token
+  try {
+    token = await prisma.$transaction((tx) => issueVerificationToken(tx, userId, email, now))
+  } catch (err) {
+    await releaseSlot(prisma, slot.eventId).catch(() => undefined)
+    logger.error('Account email task failed', {
+      task: 'verification-email', userId, errorClass: errorClass(err), error: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   res.json({ email, emailVerified: false, changed: true })
   const oldEmail = user.email
-  const changeId = token.id
-  afterResponse(verificationEmailTask(token, email, slot.eventId))
-  afterResponse(() => {
+  const changeId = randomUUID()
+  if (token) afterResponse({ task: 'verification-email', userId }, verificationEmailTask(token, email, slot.eventId, userId))
+  afterResponse({ task: 'email-changed-email', userId }, () => {
     const c = loadNudgeConfig()
     const message = renderEmailChangedEmail(
       { to: oldEmail, newAddressMasked: maskEmail(email), changeId },
