@@ -85,8 +85,8 @@ done
 # The generated Prisma client must match backend/prisma/schema.prisma (it does not update on pull or on
 # migrate deploy). A stale client loads fine and then fails inside requests and background tasks.
 if [ -d backend/node_modules ]; then
-  # PRISMA_SCHEMA_PATH / PRISMA_GENERATED_SCHEMA_PATH: test overrides only (default: backend/).
-  client_json=$(node scripts/prisma-client-status.js ${PRISMA_SCHEMA_PATH:+"$PRISMA_SCHEMA_PATH"} ${PRISMA_GENERATED_SCHEMA_PATH:+"$PRISMA_GENERATED_SCHEMA_PATH"} 2>&1); client_rc=$?
+  # The script also reads PRISMA_SCHEMA_PATH / PRISMA_GENERATED_SCHEMA_PATH (test overrides; default backend/).
+  client_json=$(node scripts/prisma-client-status.js 2>&1); client_rc=$?
   case "$client_rc" in
     0) ok "Prisma client matches backend/prisma/schema.prisma" ;;
     1) fail "Prisma client is out of date (generated from an older schema.prisma)" "cd backend && npx prisma generate" ;;

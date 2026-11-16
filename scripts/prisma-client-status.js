@@ -27,7 +27,8 @@ function prismaClientStatus(schemaPath = path.join(BACKEND, 'prisma', 'schema.pr
 const EXIT = { current: 0, stale: 1, missing: 2, 'no-schema': 3 }
 
 if (require.main === module) {
-  const result = prismaClientStatus(process.argv[2], process.argv[3])
+  // Arguments, else PRISMA_SCHEMA_PATH / PRISMA_GENERATED_SCHEMA_PATH (test overrides), else backend/.
+  const result = prismaClientStatus(process.argv[2] || process.env.PRISMA_SCHEMA_PATH || undefined, process.argv[3] || process.env.PRISMA_GENERATED_SCHEMA_PATH || undefined)
   console.log(JSON.stringify(result))
   process.exit(EXIT[result.status])
 }
