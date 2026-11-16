@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One-command health check for the Verdict dev environment.
 #   bash scripts/doctor.sh
-# Checks: Docker, ports 5432/6379, env files, installed dependencies, migrations, and the seed.
+# Checks: Docker, ports 5432/6379, env files, installed dependencies, the generated Prisma client,
+# migrations, and the seed.
 # Prints OK / WARN / FAIL / SKIP per check with a suggested fix. Exits 1 if anything FAILED.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -81,6 +82,20 @@ for dir in . frontend backend; do
   if [ -d "$dir/node_modules" ]; then ok "node_modules installed in ${dir}"
   else deps_ok=0; fail "node_modules missing in ${dir}" "bash .devcontainer/install-deps.sh"; fi
 done
+# The generated Prisma client must match backend/prisma/schema.prisma (it does not update on pull or on
+# migrate deploy). A stale client loads fine and then fails inside requests and background tasks.
+if [ -d backend/node_modules ]; then
+  # PRISMA_SCHEMA_PATH / PRISMA_GENERATED_SCHEMA_PATH: test overrides only (default: backend/).
+  client_json=$(node scripts/prisma-client-status.js ${PRISMA_SCHEMA_PATH:+"$PRISMA_SCHEMA_PATH"} ${PRISMA_GENERATED_SCHEMA_PATH:+"$PRISMA_GENERATED_SCHEMA_PATH"} 2>&1); client_rc=$?
+  case "$client_rc" in
+    0) ok "Prisma client matches backend/prisma/schema.prisma" ;;
+    1) fail "Prisma client is out of date (generated from an older schema.prisma)" "cd backend && npx prisma generate" ;;
+    2) fail "Prisma client not generated" "cd backend && npx prisma generate" ;;
+    *) fail "Prisma client check failed: $(printf '%s' "$client_json" | tail -n 1 | cut -c1-110)" "cd backend && npx prisma generate" ;;
+  esac
+else
+  skip "Prisma client: backend dependencies not installed"
+fi
 if python3 -c 'import fastapi, uvicorn, sklearn' >/dev/null 2>&1; then ok "ML Python dependencies importable"
 else fail "ML Python dependencies not importable (fastapi/uvicorn/scikit-learn)" "python3 -m pip install -r ml/requirements.txt"; fi
 
