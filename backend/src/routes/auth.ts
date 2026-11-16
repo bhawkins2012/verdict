@@ -9,6 +9,7 @@ import { AppError } from '../middleware/errorHandler'
 import { authenticate } from '../middleware/authenticate'
 import { devOnly } from '../middleware/devOnly'
 import { logger } from '../lib/logger'
+import { safeErrorMessage } from '../lib/safeError'
 import { dryRunOutbox } from '../nudges/providers'
 import { emailField, maskEmail } from '../auth/emailAddress'
 import { claimAddressSlot, releaseSlot } from '../auth/emailLimits'
@@ -154,7 +155,7 @@ async function sendFirstVerificationEmail(userId: string, email: string, now: Da
     return await verificationEmailTask(token, email, slot.eventId, userId)()
   } catch (err) {
     logger.error('Account email task failed', {
-      task: 'verification-email', userId, errorClass: errorClass(err), error: err instanceof Error ? err.message : String(err),
+      task: 'verification-email', userId, errorClass: errorClass(err), error: safeErrorMessage(err),
     })
     return false
   }

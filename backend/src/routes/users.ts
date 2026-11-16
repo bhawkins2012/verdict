@@ -15,8 +15,9 @@ import { claimAddressSlot, releaseSlot, takeEmailChangeAttempt } from '../auth/e
 import { renderEmailChangedEmail } from '../auth/emails'
 import { ipLimiter, tooManyRequests } from '../auth/ipLimits'
 import { afterResponse, errorClass, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
-import { issueVerificationToken, supersedeTokens } from '../auth/verificationTokens'
+import { AddressChangedError, issueVerificationToken, supersedeTokens } from '../auth/verificationTokens'
 import { logger } from '../lib/logger'
+import { safeErrorMessage } from '../lib/safeError'
 import { randomUUID } from 'crypto'
 
 export const usersRouter = Router()
@@ -204,8 +205,11 @@ usersRouter.put('/me/email', authenticate, emailChangeLimiter, async (req: Reque
     token = await prisma.$transaction((tx) => issueVerificationToken(tx, userId, email, now))
   } catch (err) {
     await releaseSlot(prisma, slot.eventId).catch(() => undefined)
-    logger.error('Account email task failed', {
-      task: 'verification-email', userId, errorClass: errorClass(err), error: err instanceof Error ? err.message : String(err),
+    // A second change committed in between (A -> B, then B -> C) is an expected race, not a failure: the
+    // later change sends its own link.
+    const level = err instanceof AddressChangedError ? 'info' : 'error'
+    logger[level]('Account email task failed', {
+      task: 'verification-email', userId, errorClass: errorClass(err), error: safeErrorMessage(err),
     })
   }
 
@@ -219,6 +223,6 @@ usersRouter.put('/me/email', authenticate, emailChangeLimiter, async (req: Reque
       { to: oldEmail, newAddressMasked: maskEmail(email), changeId },
       { fromEmail: c.fromEmail, postalAddress: c.postalAddress }
     )
-    return sendAccountEmail('email-changed', message)
+    return sendAccountEmail('email-changed', message, undefined, userId)
   })
 })

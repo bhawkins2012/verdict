@@ -6,12 +6,15 @@ import { flushAccountEmails, setTransactionalProviderForTests } from '../src/aut
 import { logger } from '../src/lib/logger'
 import { api, bearer, cleanup, registerUser, uniqueUser } from './helpers'
 import { mockProvider } from './nudges/fixtures'
+import { Prisma } from '@prisma/client'
+import { safeErrorMessage } from '../src/lib/safeError'
 
 const userIds: string[] = []
+const emails: string[] = [] // addresses this file registered; only their users are cleaned up
 afterEach(async () => {
   jest.restoreAllMocks()
   setTransactionalProviderForTests(null)
-  const rows = await prisma.user.findMany({ where: { email: { startsWith: 't_' } }, select: { id: true } })
+  const rows = await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true } })
   userIds.push(...rows.map((r) => r.id))
 })
 afterAll(async () => {
@@ -21,6 +24,7 @@ afterAll(async () => {
 
 async function register() {
   const u = uniqueUser()
+  emails.push(u.email)
   const res = await api().post('/api/auth/register').send(u)
   await flushAccountEmails()
   return { u, res }
@@ -89,5 +93,55 @@ describe('failure logging', () => {
     const { u } = await register()
     const user = await prisma.user.findUniqueOrThrow({ where: { email: u.email } })
     expect(error).toHaveBeenCalledWith('Account email failed; the user can resend', expect.objectContaining({ kind: 'verification', userId: user.id, errorClass: 'RangeError' }))
+  })
+})
+
+describe('logs never carry the address, a password hash or a token', () => {
+  /** A real PrismaClientValidationError whose message dumps the call's arguments, as with a stale client. */
+  async function validationErrorFor(email: string): Promise<Error> {
+    const data = { email, tokenHash: 'x', expiresAt: new Date(), userId: 'nope', claimedAt: new Date() } as unknown as Prisma.EmailVerificationTokenUncheckedCreateInput
+    try {
+      await prisma.emailVerificationToken.create({ data })
+    } catch (e) {
+      if (e instanceof Error) return e
+    }
+    throw new Error('expected a validation error')
+  }
+
+  it('safeErrorMessage keeps the explanation of a Prisma validation error and drops the dumped arguments', async () => {
+    const err = await validationErrorFor('secret.person@example.com')
+    expect(err.name).toBe('PrismaClientValidationError')
+    expect(err.message).toContain('secret.person@example.com') // what used to be logged
+    const safe = safeErrorMessage(err)
+    expect(safe).toMatch(/Unknown argument `claimedAt`/)
+    expect(safe).not.toContain('secret.person')
+  })
+
+  it('redacts addresses, bcrypt hashes and tokens in any other error text', () => {
+    const hash = '$2a$12$WCkHyIdzticnuyVuE9TI7ebDTuIPpoHHWEBzavnHVCYVZOPp/GeB6'
+    const token = 'A'.repeat(43)
+    expect(safeErrorMessage(new Error(`Resend API 403: cannot send to jane.doe@example.com (${hash}, ${token})`))).toBe('Resend API 403: cannot send to [email] ([hash], [token])')
+  })
+
+  it('register with a failing token step: the logged meta does not contain the address', async () => {
+    const error = jest.spyOn(logger, 'error')
+    const u = uniqueUser()
+    emails.push(u.email)
+    const thrown = await validationErrorFor(u.email)
+    jest.spyOn(tokens, 'issueVerificationToken').mockRejectedValue(thrown)
+    await api().post('/api/auth/register').send(u)
+    await flushAccountEmails()
+    const logged = JSON.stringify(error.mock.calls)
+    expect(logged).toContain('Unknown argument')
+    expect(logged).not.toContain(u.email)
+  })
+
+  it('a provider error that quotes the recipient is logged without it', async () => {
+    const error = jest.spyOn(logger, 'error')
+    setTransactionalProviderForTests(mockProvider({ send: async (m) => { throw new Error(`rejected recipient ${m.to}`) } }).provider)
+    const { u } = await register()
+    const logged = JSON.stringify(error.mock.calls)
+    expect(logged).toContain('rejected recipient [email]')
+    expect(logged).not.toContain(u.email)
   })
 })

@@ -8,6 +8,7 @@
 // per-address slot is released so the user can press "Resend" (the soft gate means nobody is locked out).
 import { prisma } from '../lib/prisma'
 import { logger } from '../lib/logger'
+import { safeErrorMessage } from '../lib/safeError'
 import { loadNudgeConfig } from '../nudges/config'
 import { createProvider, EmailMessage, EmailProvider } from '../nudges/providers'
 import { isDevEnvironment } from '../middleware/devOnly'
@@ -60,7 +61,7 @@ export async function sendAccountEmail(kind: EmailKind, message: EmailMessage, s
   } catch (err) {
     logger.error('Account email failed; the user can resend', {
       kind, userId, provider: provider.name, idempotencyKey: message.idempotencyKey, errorClass: errorClass(err),
-      error: err instanceof Error ? err.message : String(err),
+      error: safeErrorMessage(err),
     })
     if (slotEventId) await releaseSlot(prisma, slotEventId).catch(() => undefined)
     return false
@@ -80,7 +81,7 @@ export function afterResponse(context: TaskContext, task: () => Promise<unknown>
     .then(task)
     .catch((err) =>
       logger.error('Account email task failed', {
-        task: context.task, userId: context.userId, errorClass: errorClass(err), error: err instanceof Error ? err.message : String(err),
+        task: context.task, userId: context.userId, errorClass: errorClass(err), error: safeErrorMessage(err),
       })
     )
     .finally(() => inFlight.delete(p))
