@@ -61,7 +61,13 @@ export function resolveFrontendUrl(env: Env = process.env): ResolvedFrontendUrl 
   if (configuredIsLocal && inCodespace) {
     return { url: `https://${name}-${port}.${domain}`, source: 'codespaces', port, isLocalhost: false }
   }
-  if (configured) return { url: configured, source: 'FRONTEND_URL', port, isLocalhost: configuredIsLocal }
+  if (configured && configuredIsLocal) {
+    // A localhost FRONTEND_URL follows the resolved port, so it matches where Vite listens (FRONTEND_PORT).
+    const u = new URL(configured)
+    u.port = String(port)
+    return { url: u.toString().replace(/\/+$/, ''), source: 'FRONTEND_URL', port, isLocalhost: true }
+  }
+  if (configured) return { url: configured, source: 'FRONTEND_URL', port, isLocalhost: false }
   return { url: `http://localhost:${port}`, source: 'default', port, isLocalhost: true }
 }
 
@@ -71,6 +77,8 @@ export function resolveFrontendUrl(env: Env = process.env): ResolvedFrontendUrl 
  * proxy, so this matters only for direct calls.
  */
 export function corsOrigins(resolved: ResolvedFrontendUrl = resolveFrontendUrl()): string[] {
+  // An explicit public FRONTEND_URL (production-like): that origin only.
+  if (resolved.source === 'FRONTEND_URL' && !resolved.isLocalhost) return [resolved.url]
   const local = `http://localhost:${resolved.port}`
   return resolved.url === local ? [local] : [resolved.url, local]
 }

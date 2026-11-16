@@ -25,6 +25,9 @@ describe('resolveFrontendUrl', () => {
     expect(resolveFrontendUrl({ ...CODESPACE, FRONTEND_PORT: '4000' }).url).toBe('https://fuzzy-robot-x7g-4000.app.github.dev')
     expect(resolveFrontendUrl({ ...CODESPACE, FRONTEND_URL: 'http://localhost:5174' }).url).toBe('https://fuzzy-robot-x7g-5174.app.github.dev')
     expect(resolveFrontendUrl({ FRONTEND_PORT: '4000' }).url).toBe('http://localhost:4000')
+    // A localhost FRONTEND_URL follows FRONTEND_PORT, so local links match where Vite listens.
+    expect(resolveFrontendUrl({ FRONTEND_URL: 'http://localhost:5173', FRONTEND_PORT: '5199' }).url).toBe('http://localhost:5199')
+    expect(resolveFrontendUrl({ FRONTEND_URL: 'https://verdict.example.com', FRONTEND_PORT: '5199' }).url).toBe('https://verdict.example.com')
     expect(resolveFrontendUrl({ ...CODESPACE, FRONTEND_PORT: 'nope' }).port).toBe(5173)
   })
 
@@ -60,17 +63,28 @@ describe('emailed links and startup messages', () => {
   })
 })
 
+/** Set the Codespaces variables for one test and put back whatever was there before. */
+const saved: Record<string, string | undefined> = {}
+function enterCodespace() {
+  for (const k of Object.keys(CODESPACE)) saved[k] = process.env[k]
+  Object.assign(process.env, CODESPACE)
+}
+function leaveCodespace() {
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+}
+
 describe('a real verification email in a Codespace', () => {
-  afterEach(() => {
-    for (const k of Object.keys(CODESPACE)) delete process.env[k]
-  })
+  afterEach(leaveCodespace)
 
   it('carries the forwarded https link, not localhost', async () => {
     const { api, cleanup, uniqueUser } = await import('./helpers')
     const { flushAccountEmails, setTransactionalProviderForTests } = await import('../src/auth/mailer')
     const { mockProvider } = await import('./nudges/fixtures')
     const { prisma } = await import('../src/lib/prisma')
-    Object.assign(process.env, CODESPACE)
+    enterCodespace()
     const m = mockProvider()
     setTransactionalProviderForTests(m.provider)
     const u = uniqueUser()
@@ -86,20 +100,21 @@ describe('a real verification email in a Codespace', () => {
 
 describe('CORS with the derived URL', () => {
   let app: Express
-  const saved = { ...process.env }
   beforeAll(async () => {
-    Object.assign(process.env, CODESPACE, { FRONTEND_URL: 'http://localhost:5173' })
+    enterCodespace()
     jest.resetModules()
     app = (await import('../src/app')).app
   })
   afterAll(() => {
-    for (const k of Object.keys(CODESPACE)) delete process.env[k]
-    Object.assign(process.env, saved)
+    leaveCodespace()
     jest.resetModules()
   })
 
   it('allows the forwarded https origin and the local one; not others', async () => {
     expect(corsOrigins(resolveFrontendUrl({ ...CODESPACE }))).toEqual(['https://fuzzy-robot-x7g-5173.app.github.dev', 'http://localhost:5173'])
+    expect(corsOrigins(resolveFrontendUrl({}))).toEqual(['http://localhost:5173'])
+    // An explicit public FRONTEND_URL allows only itself, not localhost.
+    expect(corsOrigins(resolveFrontendUrl({ FRONTEND_URL: 'https://verdict.example.com' }))).toEqual(['https://verdict.example.com'])
     const preflight = (origin: string) =>
       request(app).options('/api/auth/login').set('Origin', origin).set('Access-Control-Request-Method', 'POST')
     const forwarded = await preflight('https://fuzzy-robot-x7g-5173.app.github.dev')
