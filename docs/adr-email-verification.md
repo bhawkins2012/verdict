@@ -171,7 +171,7 @@ model EmailRateEvent {      // database-backed limits (D4)
 }
 ```
 
-**Normalization migration (change 4, its own commit, before the one above).** It aborts, changing nothing, if existing rows would collide once trimmed and lower-cased, and lists every offending address (`alice@example.com -> ['Alice@Example.com', 'alice@example.com']; …`); the operator merges or renames those accounts, runs `prisma migrate resolve --rolled-back 20261116000000_user_email_normalized`, and deploys again. Otherwise it normalizes existing rows and adds `CHECK (email = lower(btrim(email)))` and a unique index on `lower(email)`. Prisma cannot express either, and `prisma migrate diff` ignores both (checked: no drift).
+**Normalization migration (change 4, its own commit, before the one above).** It aborts, changing nothing, if existing rows would collide once trimmed and lower-cased, and lists every offending address (`alice@example.com -> ['Alice@Example.com', 'alice@example.com']; …`); the operator merges or renames those accounts, runs `cd backend && npx prisma migrate resolve --rolled-back 20261116000000_user_email_normalized`, and deploys again. Otherwise it normalizes existing rows and adds `CHECK (email = lower(btrim(email)))` and a unique index on `lower(email)`. Prisma cannot express either, and `prisma migrate diff` ignores both (checked: no drift).
 
 - **Additive only:** two new tables and one nullable column; users already verified (the seed) get `emailVerifiedAt` backfilled. Existing data is untouched, and the seed sets `emailVerifiedAt` for its verified users.
 - **Retention.** Token rows older than 30 days are deleted by a small cleanup query on the reconciler's existing hourly sweep tick, so no new scheduler is needed.

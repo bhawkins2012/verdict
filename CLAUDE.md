@@ -31,10 +31,21 @@ Run from the repo root unless noted. Postgres/Redis: `docker compose up -d`.
 | Typecheck | `npm run typecheck` (backend + frontend; ML has none) |
 | Lint | `npm run lint` (backend + frontend; ML has none) |
 | Test | `npm test` · per package: `npm run test:backend` / `test:frontend` / `test:ml` |
+| Generate the Prisma client | `cd backend && npx prisma generate` (also runs automatically: backend `predev`/`prebuild`/`pretest`, devcontainer install and start) |
 | Apply migrations | `npm run db:deploy` (= `prisma migrate deploy`) |
 | Create a migration | `cd backend && npx prisma migrate dev --name <name>` in an **interactive** terminal, then commit `prisma/migrations/` |
 | Seed | `npm run db:seed` |
 | Prisma Studio | `npm run db:studio` |
+
+**After pulling** (or switching branches), in this order:
+1. `git pull`
+2. `bash .devcontainer/install-deps.sh` (or `npm install` in the root, `frontend/` and `backend/` if `package-lock.json` changed)
+3. `(cd backend && npx prisma generate)`: `migrate deploy` does **not** update the generated client; a stale one makes the API refuse to start ("Prisma client is out of date") or, before that guard existed, fail inside background tasks ("Unknown argument `claimedAt`")
+4. `npm run db:deploy` (from the root)
+5. Restart the dev servers (`npm run dev`; `ts-node-dev` does not reload on a regenerated client)
+`bash scripts/doctor.sh` checks each of these, including whether the generated client matches `schema.prisma`.
+
+**Prisma commands run inside `backend/`** (`cd backend && npx prisma …`) or through the root `db:*` scripts. Prisma is only installed there; a bare `npx prisma` from the repo root can offer to download a different major version.
 
 Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `carol@…`). API docs: `http://localhost:3001/api/docs`.
 
@@ -48,6 +59,7 @@ Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `
   - **Both scripts always exit 0**, printing a clear summary of what failed, so a flaky pull/install can never put the codespace into recovery mode. If the summary reports problems, run `bash scripts/doctor.sh`, fix the cause, and re-run `bash .devcontainer/start.sh`.
   - The base image is pinned to `javascript-node:22-bookworm` and the docker-in-docker feature uses `"moby": false`. The floating `22` tag moved to Debian trixie, where the feature's default Moby install aborts and the container fails to build.
 - **`TRUST_PROXY`** (backend, default `1`) is how many reverse-proxy hops Express trusts for `X-Forwarded-For`; it decides `req.ip` and therefore the per-client rate-limit bucket. Set it to the real number of hops in front of the API (the Codespaces proxy and a typical single load balancer are 1; direct connections are 0). Too low puts every user in one bucket and makes `express-rate-limit` log `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`; too high lets clients spoof their IP. **Never `true`**: `parseTrustProxy` (`backend/src/lib/trustProxy.ts`) refuses it and match-everything subnets at startup. `RATE_LIMIT_MAX` (default 200 per 15 min) exists mainly so tests can use a small limit.
+- The API checks at startup that the generated Prisma client has every model, field and enum value the nudge and verification code uses (`src/lib/prismaClientGuard.ts`) and exits with "Prisma client is out of date: run npx prisma generate" if not. Adding a field to that code? Add it to `REQUIRED_MODELS` there.
 - Always use `prisma migrate deploy` in scripts and CI. `migrate dev` is interactive and only for authoring migrations.
 - A database created earlier with `prisma db push` has no migration history, so `migrate deploy` fails with `P3005`. Recreate it (`docker compose down -v && docker compose up -d`), or baseline it by hand; which migrations to mark applied depends on the schema it was pushed from, see the README.
 - Backend tests use a separate Postgres schema (`?schema=test`) in the same database and apply migrations in Jest `globalSetup`. Override with `TEST_DATABASE_URL`. They need Postgres but not Redis or the ML service (both mocked).

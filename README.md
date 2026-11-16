@@ -69,12 +69,14 @@ npx prisma db seed
 > To keep the data instead, mark each migration the database *already contains* as applied, then deploy the rest:
 >
 > - pushed from an older schema (no `reviews_threadId_stage_key` index yet):
->   `npx prisma migrate resolve --applied 20260101000000_init`, then `npx prisma migrate deploy`
+>   `cd backend && npx prisma migrate resolve --applied 20260101000000_init`, then `npx prisma migrate deploy`
 >   (this applies the unique-index migration, which fails if you have duplicate review stages).
 > - pushed from the current schema: also run
->   `npx prisma migrate resolve --applied 20260102000000_review_unique_thread_stage`.
+>   `cd backend && npx prisma migrate resolve --applied 20260102000000_review_unique_thread_stage`.
 >
-> If a migration already failed halfway, run `npx prisma migrate resolve --rolled-back <migration-name>` first.
+> If a migration already failed halfway, run `cd backend && npx prisma migrate resolve --rolled-back <migration-name>` first.
+>
+> Run Prisma commands inside `backend/` (it is only installed there). After pulling schema changes, also run `npx prisma generate` there (see CLAUDE.md, "After pulling").
 
 ### 4. Run Everything
 
