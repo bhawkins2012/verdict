@@ -38,7 +38,8 @@ summary() {
       echo
       echo "Next: run 'bash scripts/doctor.sh', fix the cause, then re-run 'bash .devcontainer/start.sh'."
     fi
-    [ -n "${frontend_url:-}" ] && echo "Frontend (open it here; also used for links in emails): $frontend_url"
+    # if/fi, not `[ ] && echo`: the group's exit status decides whether the log is written (mv below).
+    if [ -n "${frontend_url:-}" ]; then echo "Frontend (open it here; also used for links in emails): $frontend_url"; fi
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$LOG" 2>/dev/null
   echo
   cat "$LOG" 2>/dev/null
@@ -101,7 +102,14 @@ install_shell_hook
 
 # ── Frontend URL (shared helper backend/src/lib/frontendUrl.ts): in a Codespace, links in emails must use
 #    the forwarded https address, not localhost. Printed in the summary; the backend resolves it the same way.
-frontend_url=$(cd backend && npx --no-install ts-node --transpile-only src/scripts/frontendUrl.ts 2>/dev/null) || frontend_url=""
+fe_out=$(cd backend && npx --no-install ts-node --transpile-only src/scripts/frontendUrl.ts 2>&1); fe_rc=$?
+frontend_url=""
+if [ "$fe_rc" -eq 0 ]; then
+  frontend_url=$(printf '%s\n' "$fe_out" | tail -n 1)
+else
+  note "Could not resolve the frontend URL (backend dependencies installed?). Links in emails fall back to FRONTEND_URL or localhost."
+  detail "$(tail_of "$fe_out" 4)"
+fi
 [ -n "$frontend_url" ] && echo "Frontend URL (links in emails, CORS): $frontend_url"
 
 # ── Docker (docker-in-docker: the daemon starts asynchronously after the container) ───────────
