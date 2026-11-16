@@ -38,6 +38,7 @@ summary() {
       echo
       echo "Next: run 'bash scripts/doctor.sh', fix the cause, then re-run 'bash .devcontainer/start.sh'."
     fi
+    [ -n "${frontend_url:-}" ] && echo "Frontend (open it here; also used for links in emails): $frontend_url"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$LOG" 2>/dev/null
   echo
   cat "$LOG" 2>/dev/null
@@ -97,6 +98,11 @@ install_shell_hook
 # ── Env files (copied from the single localhost template; no editing) ──────────────────────────
 [ -f backend/.env ]  || cp backend/.env.example backend/.env   || note "could not create backend/.env"
 [ -f frontend/.env ] || cp frontend/.env.example frontend/.env || note "could not create frontend/.env"
+
+# ── Frontend URL (shared helper backend/src/lib/frontendUrl.ts): in a Codespace, links in emails must use
+#    the forwarded https address, not localhost. Printed in the summary; the backend resolves it the same way.
+frontend_url=$(cd backend && npx --no-install ts-node --transpile-only src/scripts/frontendUrl.ts 2>/dev/null) || frontend_url=""
+[ -n "$frontend_url" ] && echo "Frontend URL (links in emails, CORS): $frontend_url"
 
 # ── Docker (docker-in-docker: the daemon starts asynchronously after the container) ───────────
 docker_ok=0

@@ -1,6 +1,8 @@
 import { app } from './app'
 import { logger } from './lib/logger'
 import { assertPrismaClientCurrent } from './lib/prismaClientGuard'
+import { frontendUrlStartupMessages, resolveFrontendUrl } from './lib/frontendUrl'
+import { createProvider } from './nudges/providers'
 import { loadNudgeConfig } from './nudges/config'
 import { startNudgeRuntime } from './nudges/runtime'
 import { drainAccountEmails } from './auth/mailer'
@@ -15,7 +17,15 @@ try {
   logger.error(err instanceof Error ? err.message : String(err))
   process.exit(1)
 }
-loadNudgeConfig()
+const nudgeConfig = loadNudgeConfig()
+
+// Where emailed links and CORS point (no secrets), and a loud warning if real email would carry links
+// that only work on this machine.
+{
+  const messages = frontendUrlStartupMessages(resolveFrontendUrl(), createProvider(nudgeConfig).real)
+  logger.info(messages.info)
+  if (messages.warn) logger.warn(messages.warn)
+}
 
 const server = app.listen(PORT, () => {
   logger.info(`🚀 Verdict API running on http://localhost:${PORT}`)
