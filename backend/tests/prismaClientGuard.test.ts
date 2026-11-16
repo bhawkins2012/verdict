@@ -1,8 +1,9 @@
 import { Prisma } from '@prisma/client'
 import { spawn } from 'child_process'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
-import { assertPrismaClientCurrent, missingFromClient, OUT_OF_DATE_MESSAGE, PrismaClientOutOfDateError, REQUIRED_ENUMS, REQUIRED_MODELS } from '../src/lib/prismaClientGuard'
+import { assertPrismaClientCurrent, generatedSchemaDiffers, missingFromClient, OUT_OF_DATE_MESSAGE, PrismaClientOutOfDateError, REQUIRED_ENUMS, REQUIRED_MODELS } from '../src/lib/prismaClientGuard'
 
 // A copy of the current client's datamodel that tests can damage, like an old client would be.
 interface Datamodel {
@@ -55,6 +56,37 @@ describe('Prisma client startup guard', () => {
       for (const v of values) if (!new RegExp(`^\\s+${v}\\b`, 'm').test(body)) missing.push(`${name}.${v}`)
     }
     expect(missing).toEqual([])
+  })
+})
+
+describe('schema-file comparison (catches changes the REQUIRED list does not name)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-schema-'))
+  const schema = path.join(dir, 'schema.prisma')
+  const generated = path.join(dir, 'generated.prisma')
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  it('a complete datamodel but a schema changed since `prisma generate` still fails', () => {
+    fs.writeFileSync(schema, 'model RefreshToken {\n  id String @id\n  revokedAt DateTime?\n}\n')
+    fs.writeFileSync(generated, 'model RefreshToken {\n  id String @id\n}\n')
+    expect(missingFromClient()).toEqual([]) // nothing the list names is missing...
+    expect(generatedSchemaDiffers(schema, generated)).toBe(true)
+    expect(() => assertPrismaClientCurrent(undefined, { schema, generated })).toThrow(/schema\.prisma changed since the client was generated/)
+  })
+
+  it('identical (whitespace-insensitive) passes; a missing file falls back to the list only', () => {
+    fs.writeFileSync(schema, 'model A {\n  id Int @id\n}\n')
+    fs.writeFileSync(generated, 'model A {\r\n  id Int @id  \r\n}')
+    expect(generatedSchemaDiffers(schema, generated)).toBe(false)
+    expect(generatedSchemaDiffers(schema, path.join(dir, 'none.prisma'))).toBeNull()
+    expect(() => assertPrismaClientCurrent(undefined, { schema, generated: path.join(dir, 'none.prisma') })).not.toThrow()
+  })
+
+  it("this repo's generated client matches its schema", () => {
+    expect(generatedSchemaDiffers()).toBe(false)
+  })
+
+  it('a client without Prisma.dmmf is not a crash: only the file comparison applies', () => {
+    expect(missingFromClient(null)).toEqual([])
   })
 })
 
