@@ -16,6 +16,7 @@ import { configRouter } from './routes/config'
 import { errorHandler } from './middleware/errorHandler'
 import { setupSwagger } from './lib/swagger'
 import { logger } from './lib/logger'
+import { corsOrigins } from './lib/frontendUrl'
 import { parseTrustProxy } from './lib/trustProxy'
 
 export const app = express()
@@ -27,7 +28,9 @@ app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY))
 // ── Security & Middleware ──────────────────────────────────
 app.use(helmet())
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  // The same resolved URL as email links (lib/frontendUrl.ts): FRONTEND_URL, or in a Codespace the
+  // forwarded https address.
+  origin: corsOrigins(),
   credentials: true,
 }))
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }))

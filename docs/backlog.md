@@ -215,6 +215,8 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 ---
 
 ## Also noted (smaller, not yet itemized)
+- `frontend/tsconfig.node.json` (the Vite config and `devServerPort.ts`) is never type-checked: `npm run typecheck`/`build` run plain `tsc`, which skips project references, and it has no Node types (`Cannot find module 'path'` on `main`). Add Node types and check it in CI.
+- In CI the backend `pretest` hook runs `prisma generate` a second time after the explicit step (harmless, ~150 ms).
 - Sprint 1 leftovers: the dashboard progress bar shows `TWO_WEEKS` grey on legacy threads that have a hand-written `ONE_MONTH` review (cosmetic); the frontend does not zod-validate `GET /api/config` (no zod dependency in the frontend).
 - The CI Postgres service container's healthcheck still uses socket-based `pg_isready` (the dev compose file was fixed in PR #4); harmless so far because Jest's `globalSetup` migrates first and fails loudly.
 - The frontend production build warns about a chunk over 500 kB; route-level code splitting would fix it.

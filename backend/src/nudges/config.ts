@@ -2,6 +2,7 @@
 // change the environment; startup calls loadNudgeConfig() once so a bad configuration fails fast.
 import { z } from 'zod'
 import { logger } from '../lib/logger'
+import { resolveFrontendUrl } from '../lib/frontendUrl'
 
 export type ProviderName = 'console' | 'resend'
 
@@ -47,7 +48,7 @@ const envSchema = z.object({
   NUDGE_REQUIRE_VERIFIED_EMAIL: bool(true),
   NUDGE_POSTAL_ADDRESS: z.string().trim().min(1).optional(),
   NUDGES_ENABLED: bool(true),
-  FRONTEND_URL: z.string().url().optional().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().trim().url().optional(),
 })
 
 let warnedDevSecret = false
@@ -96,6 +97,7 @@ export function loadNudgeConfig(env: NodeJS.ProcessEnv = process.env): NudgeConf
     requireVerifiedEmail: e.NUDGE_REQUIRE_VERIFIED_EMAIL,
     postalAddress: e.NUDGE_POSTAL_ADDRESS ?? POSTAL_PLACEHOLDER,
     enabled: e.NUDGES_ENABLED,
-    frontendUrl: e.FRONTEND_URL.replace(/\/+$/, ''),
+    // Codespaces-aware (lib/frontendUrl.ts): the same value app.ts uses for CORS.
+    frontendUrl: resolveFrontendUrl(env).url,
   }
 }

@@ -9,12 +9,13 @@ import { AppError } from '../middleware/errorHandler'
 import { authenticate } from '../middleware/authenticate'
 import { devOnly } from '../middleware/devOnly'
 import { logger } from '../lib/logger'
+import { safeErrorMessage } from '../lib/safeError'
 import { dryRunOutbox } from '../nudges/providers'
 import { emailField, maskEmail } from '../auth/emailAddress'
 import { claimAddressSlot, releaseSlot } from '../auth/emailLimits'
 import { renderSignupAttemptEmail } from '../auth/emails'
 import { ipLimiter, tooManyRequests } from '../auth/ipLimits'
-import { accountEmailSettings, afterResponse, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
+import { accountEmailSettings, afterResponse, errorClass, sendAccountEmail, verificationEmailTask } from '../auth/mailer'
 import { AddressChangedError, consumeVerificationToken, issueVerificationToken } from '../auth/verificationTokens'
 
 export const authRouter = Router()
@@ -96,12 +97,16 @@ authRouter.post('/register', registerLimiter, async (req: Request, res: Response
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
 
   res.status(202).json(REGISTER_ACCEPTED)
-  afterResponse(() => completeRegistration({ email, username, passwordHash, displayName }, new Date()))
+  afterResponse({ task: 'registration' }, () => completeRegistration({ email, username, passwordHash, displayName }, new Date()))
 })
 
 /**
- * After the 202: create the account and email a link, or tell the owner of an existing address. The
- * per-address slot is claimed only after the account exists, so a failed or raced insert never holds it.
+ * After the 202: create the account and email a link, or tell the owner of an existing address.
+ *
+ * The account is committed on its own, BEFORE anything on the email path (per-address slot, token, send).
+ * A failure there is logged with the user id and never removes the account: the user signs in, sees the
+ * banner and presses Resend. (Creating the user and the token in one transaction meant a token failure
+ * rolled the account back while the client had already been told 202.)
  */
 async function completeRegistration(
   input: { email: string; username: string; passwordHash: string; displayName: string | undefined },
@@ -111,15 +116,13 @@ async function completeRegistration(
     const notice = await signupAttemptTask(input.email, now)
     return notice?.()
   }
-  let token
+  let userId: string
   try {
-    token = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: { email: input.email, username: input.username, passwordHash: input.passwordHash, displayName: input.displayName },
-        select: { id: true },
-      })
-      return issueVerificationToken(tx, user.id, input.email, now)
+    const user = await prisma.user.create({
+      data: { email: input.email, username: input.username, passwordHash: input.passwordHash, displayName: input.displayName },
+      select: { id: true },
     })
+    userId = user.id
   } catch (e) {
     if (!isUniqueViolation(e)) throw e
     if (onUsername(e)) {
@@ -130,12 +133,32 @@ async function completeRegistration(
     const notice = await signupAttemptTask(input.email, now) // the address was registered concurrently
     return notice?.()
   }
-  const slot = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', input.email, now)
-  if (!slot.allowed) {
-    logger.info('Verification email skipped: one was sent to this address in the last hour', { tokenId: token.id })
-    return undefined
+  return sendFirstVerificationEmail(userId, input.email, now)
+}
+
+/** The email path after an account exists: never throws, so it can never undo the account. */
+async function sendFirstVerificationEmail(userId: string, email: string, now: Date): Promise<boolean> {
+  try {
+    // The slot is claimed only after the account exists, so a failed or raced insert never holds it.
+    const slot = await claimAddressSlot(prisma, 'VERIFICATION_EMAIL', email, now)
+    if (!slot.allowed) {
+      logger.info('Verification email skipped: one was sent to this address in the last hour', { userId })
+      return false
+    }
+    let token
+    try {
+      token = await prisma.$transaction((tx) => issueVerificationToken(tx, userId, email, now))
+    } catch (err) {
+      await releaseSlot(prisma, slot.eventId).catch(() => undefined)
+      throw err
+    }
+    return await verificationEmailTask(token, email, slot.eventId, userId)()
+  } catch (err) {
+    logger.error('Account email task failed', {
+      task: 'verification-email', userId, errorClass: errorClass(err), error: safeErrorMessage(err),
+    })
+    return false
   }
-  return verificationEmailTask(token, input.email, slot.eventId)()
 }
 
 // POST /api/auth/login
@@ -280,7 +303,7 @@ authRouter.post('/verification/resend', authenticate, resendLimiter, async (req:
     throw e
   }
   res.status(202).json({ sentTo: maskEmail(user.email), sentAt: now })
-  afterResponse(verificationEmailTask(token, user.email, slot.eventId))
+  afterResponse({ task: 'verification-email', userId: user.id }, verificationEmailTask(token, user.email, slot.eventId, user.id))
 })
 
 // GET /api/auth/dev/verification-link: your newest verification link from the dry-run outbox

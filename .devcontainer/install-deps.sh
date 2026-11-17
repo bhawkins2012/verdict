@@ -15,6 +15,9 @@ run() {
 run "root dependencies"     npm install --no-audit --no-fund
 run "frontend dependencies" npm --prefix frontend install --no-audit --no-fund
 run "backend dependencies"  npm --prefix backend install --no-audit --no-fund
+# The Prisma client is generated from backend/prisma/schema.prisma; a stale one fails at runtime
+# ("Unknown argument ...") even when migrations succeed. Fast and idempotent.
+run "prisma client"         bash -c 'cd backend && npx --no-install prisma generate'
 run "ml dependencies"       python3 -m pip install -r ml/requirements.txt
 
 if [ "${#failed[@]}" -gt 0 ]; then

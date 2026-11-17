@@ -38,6 +38,8 @@ summary() {
       echo
       echo "Next: run 'bash scripts/doctor.sh', fix the cause, then re-run 'bash .devcontainer/start.sh'."
     fi
+    # if/fi, not `[ ] && echo`: the group's exit status decides whether the log is written (mv below).
+    if [ -n "${frontend_url:-}" ]; then echo "Frontend (open it here; also used for links in emails): $frontend_url"; fi
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$LOG" 2>/dev/null
   echo
   cat "$LOG" 2>/dev/null
@@ -98,6 +100,18 @@ install_shell_hook
 [ -f backend/.env ]  || cp backend/.env.example backend/.env   || note "could not create backend/.env"
 [ -f frontend/.env ] || cp frontend/.env.example frontend/.env || note "could not create frontend/.env"
 
+# ── Frontend URL (shared helper backend/src/lib/frontendUrl.ts): in a Codespace, links in emails must use
+#    the forwarded https address, not localhost. Printed in the summary; the backend resolves it the same way.
+fe_out=$(cd backend && npx --no-install ts-node --transpile-only src/scripts/frontendUrl.ts 2>&1); fe_rc=$?
+frontend_url=""
+if [ "$fe_rc" -eq 0 ]; then
+  frontend_url=$(printf '%s\n' "$fe_out" | tail -n 1)
+else
+  note "Could not resolve the frontend URL (backend dependencies installed?). Links in emails fall back to FRONTEND_URL or localhost."
+  detail "$(tail_of "$fe_out" 4)"
+fi
+[ -n "$frontend_url" ] && echo "Frontend URL (links in emails, CORS): $frontend_url"
+
 # ── Docker (docker-in-docker: the daemon starts asynchronously after the container) ───────────
 docker_ok=0
 if ! command -v docker >/dev/null 2>&1; then
@@ -145,6 +159,15 @@ esac
 # Redis: TCP is enough (BullMQ retries its own connection).
 node scripts/wait-for-port.js localhost 6379 "$redis_wait" \
   || note "Redis is not accepting connections on localhost:6379 (nudge scheduling will not work)."
+
+# ── Prisma client (no database needed): regenerate on every start, so a pulled schema change can never
+#    leave node_modules/.prisma/client behind. Fast and idempotent. ─────────────────────────────────
+gen_out=$(cd backend && npx --no-install prisma generate 2>&1); gen_rc=$?
+printf '%s\n' "$gen_out"
+if [ "$gen_rc" -ne 0 ]; then
+  note "'prisma generate' failed: the backend will refuse to start with an out-of-date client. Try: cd backend && npx prisma generate"
+  detail "$(tail_of "$gen_out" 6)"
+fi
 
 # ── Migrate (3 attempts) ───────────────────────────────────────────────────────────────────────
 run_migrate() { (cd backend && npx prisma migrate deploy); }

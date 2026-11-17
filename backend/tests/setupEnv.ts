@@ -10,3 +10,6 @@ process.env.ML_SERVICE_URL = 'http://ml.test'
 process.env.LOG_LEVEL = 'error'
 // The per-IP limit on account-email routes is 10 per 15 min by default; the suite registers many users.
 process.env.VERIFY_RATE_LIMIT_MAX = '10000'
+// Tests must not depend on where they run: inside a GitHub Codespace these would turn every emailed link
+// into the forwarded https address (src/lib/frontendUrl.ts). Tests that need them set them explicitly.
+for (const k of ['CODESPACE_NAME', 'GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN', 'FRONTEND_PORT', 'FRONTEND_URL']) delete process.env[k]
