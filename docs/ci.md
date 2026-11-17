@@ -5,7 +5,7 @@
 | Job (check name) | Runs |
 |---|---|
 | **Backend** | typecheck (`tsc`, including tests and `prisma/seed.ts`), ESLint, `prisma migrate deploy` plus a check that migrations match `schema.prisma`, Jest, build. Postgres (pgvector) and Redis run as service containers on `localhost`. |
-| **Frontend** | typecheck, ESLint, Vitest, production build. |
+| **Frontend** | typecheck (`tsconfig.json` for `src/`, and `tsconfig.node.json` for `vite.config.ts` and its helpers, with Node types), ESLint, Vitest, production build. |
 | **ML** | pytest. The ML service has no typecheck or linter configured yet. |
 
 ## Required status checks
