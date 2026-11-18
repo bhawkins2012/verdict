@@ -6,6 +6,8 @@ import { createProvider } from './nudges/providers'
 import { loadNudgeConfig } from './nudges/config'
 import { startNudgeRuntime } from './nudges/runtime'
 import { drainAccountEmails } from './auth/mailer'
+import { loadLeverConfig } from './levers/config'
+import { expireStaleRuns } from './levers/runs'
 
 const PORT = process.env.PORT || 3001
 
@@ -18,6 +20,14 @@ try {
   process.exit(1)
 }
 const nudgeConfig = loadNudgeConfig()
+// Lever generation: a live mode without ANTHROPIC_API_KEY, or a bad limit, stops startup (docs/adr-levers.md D3).
+try {
+  const leverConfig = loadLeverConfig()
+  logger.info('Lever generation configured', { mode: leverConfig.mode, model: leverConfig.mode === 'live' ? leverConfig.model : 'dry-run', dailyLimit: leverConfig.dailyLimit })
+} catch (err) {
+  logger.error(err instanceof Error ? err.message : String(err))
+  process.exit(1)
+}
 
 // Where emailed links and CORS point (no secrets), and a loud warning if real email would carry links
 // that only work on this machine.
@@ -30,6 +40,9 @@ const nudgeConfig = loadNudgeConfig()
 const server = app.listen(PORT, () => {
   logger.info(`🚀 Verdict API running on http://localhost:${PORT}`)
   logger.info(`📖 API docs at http://localhost:${PORT}/api/docs`)
+
+  // Runs left RUNNING by a crash or restart are failed as timeouts once they are stale.
+  void expireStaleRuns().catch((err) => logger.warn('Could not expire stale lever runs', { error: err instanceof Error ? err.message : String(err) }))
 
   // Nudge worker and reconciler
   if (process.env.NODE_ENV !== 'test') {

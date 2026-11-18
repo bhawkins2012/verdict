@@ -4,6 +4,7 @@ import { Prisma, PriceTier } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
+import { browseCategories, productLevers } from '../levers/catalog'
 
 export const productsRouter = Router()
 
@@ -70,7 +71,8 @@ productsRouter.get('/:id', async (req: Request, res: Response) => {
     }
   })
   if (!product) throw new AppError(404, 'Product not found')
-  res.json(product)
+  // The five published levers of its category with this product's values and sources (ADR D6).
+  res.json({ ...product, levers: await productLevers(product.id, product.categoryId) })
 })
 
 // POST /api/products — add a new product (authenticated)
@@ -84,18 +86,30 @@ productsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     if (existing) throw new AppError(409, 'A product with this Amazon ASIN already exists')
   }
 
+  // Only admins create categories; an unknown one is a 400 that lists the valid ones (ADR Q10).
+  const slug = body.data.category.trim().toLowerCase()
+  const category = await prisma.category.findUnique({ where: { slug }, select: { id: true, slug: true } })
+  if (!category) {
+    const valid = await prisma.category.findMany({ orderBy: { slug: 'asc' }, select: { slug: true } })
+    throw new AppError(400, `Unknown category "${body.data.category.slice(0, 50)}". Valid categories: ${valid.map((c) => c.slug).join(', ') || '(none yet)'}`, {
+      validCategories: valid.map((c) => c.slug),
+    })
+  }
+
+  const d = body.data
   const product = await prisma.product.create({
-    data: { ...body.data, createdBy: req.userId }
+    data: {
+      name: d.name, brand: d.brand, category: category.slug, categoryId: category.id, subcategory: d.subcategory,
+      description: d.description, imageUrl: d.imageUrl, websiteUrl: d.websiteUrl, priceTier: d.priceTier,
+      attributes: d.attributes, amazonAsin: d.amazonAsin, createdBy: req.userId,
+    }
   })
   res.status(201).json(product)
 })
 
-// GET /api/products/categories/list — list all categories
+// GET /api/products/categories/list — categories to browse: only those with published levers (ADR Q13).
+// Kept for older clients; GET /api/categories is the same list with names.
 productsRouter.get('/categories/list', async (_req: Request, res: Response) => {
-  const categories = await prisma.product.groupBy({
-    by: ['category'],
-    _count: { id: true },
-    orderBy: { _count: { id: 'desc' } }
-  })
-  res.json(categories.map(c => ({ name: c.category, count: c._count.id })))
+  const categories = await browseCategories()
+  res.json(categories.map(c => ({ name: c.slug, count: c.productCount })))
 })

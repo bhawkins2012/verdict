@@ -240,7 +240,7 @@ authRouter.get('/me', authenticate, async (req: Request, res: Response) => {
     select: {
       id: true, email: true, username: true, displayName: true,
       avatarUrl: true, createdAt: true, emailVerified: true, emailVerifiedAt: true,
-      demographics: true,
+      demographics: true, role: true,
     }
   })
   if (!user) throw new AppError(404, 'User not found')

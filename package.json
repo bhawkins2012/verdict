@@ -17,6 +17,7 @@
     "db:migrate": "cd backend && npx prisma migrate dev",
     "db:deploy": "cd backend && npx prisma migrate deploy",
     "db:seed": "cd backend && npx prisma db seed",
+    "db:seed:levers": "cd backend && npm run db:seed:levers",
     "db:studio": "cd backend && npx prisma studio",
     "lint": "cd frontend && npm run lint && cd ../backend && npm run lint",
     "typecheck": "cd backend && npm run typecheck && cd ../frontend && npm run typecheck"

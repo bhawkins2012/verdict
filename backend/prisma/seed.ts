@@ -1,6 +1,7 @@
 import { PrismaClient, ReviewStage, PriceTier, AgeRange, IncomeBracket, NudgeStatus } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { addWeeks, subMonths, subWeeks } from 'date-fns'
+import { seedLevers } from './seedLevers'
 
 const prisma = new PrismaClient()
 
@@ -376,6 +377,9 @@ async function main() {
       }
     }
   })
+
+  // Categories, the strollers levers and sample products, car seats, and (dev/test only) the admin.
+  await seedLevers(prisma)
 
   console.log('✅ Seed complete!')
   console.log(`   Users: alice, bob, carol (password: password123)`)
