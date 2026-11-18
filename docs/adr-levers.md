@@ -286,3 +286,13 @@ Spec extraction from manufacturer pages; licensed-search review synthesis ("What
 - **Category search** matches a query inside a category term ("stroll"), or a category term as whole words inside the query ("strollers for twins"), with hyphens treated as spaces.
 - **`GET /api/products/categories/list`** now lists only categories with published levers (browse rule, Q13); `GET /api/categories` is the replacement.
 - **`AppError` takes optional `details`**, merged into the JSON body next to `error` (per-row CSV errors, `retryAt`, `validCategories`).
+
+### Changes from the code review
+
+- **Lock, then read.** Lever edit, retire, the value form and the value CSV import lock the category row first and read the lever (and, for imports, the published set) again inside the lock, like publish. Before, a retire racing a publish could answer 500, an edit could skip the published-lever rules, and a value write could land on a lever that had just been retired or changed shape.
+- **API timeout below the run timeout.** The client uses a 4-minute per-attempt timeout and 1 retry, so the call always ends before a run is failed as `timeout` (10 minutes). The run row is locked before its status is checked, and a billed call that returns after its run timed out still records its tokens and cost on the failed run.
+- **`LEVER_GEN_MAX_TOKENS` is at most 21000.** The request is not streamed, and the SDK refuses a non-streaming request whose `max_tokens` could take longer than 10 minutes (about 21333), which would fail every run as `api_error:unknown`.
+- **Cost falls back to the requested model's price** when the served model name has no price (for example a dated snapshot name).
+- **Shutdown waits up to 10 s for in-flight runs**, like account emails; a run cut off is failed as a timeout later.
+- **Filters:** an empty parameter (`max=`) means "not set", and a filter with no value set no longer hides products whose value is unknown. The UI keeps min/max as typed text (decimals work) and sends one request 300 ms after typing stops.
+- **CSV error rows** are the line the record starts on (blank lines and quoted line breaks counted). A slug derived from a category name must pass the same rules as a given one.
