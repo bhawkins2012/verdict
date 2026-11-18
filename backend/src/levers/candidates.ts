@@ -1,8 +1,8 @@
 // The shape of a generation run's output (docs/adr-levers.md D3).
 //
-// Two schemas: ApiCandidateSetSchema (client.ts, zod/v4 as the SDK helper requires) is the structural
-// shape sent to the API as the structured-output format. CandidateSetSchema (here) is the strict product
-// rule set that every result must pass before anything is stored, whatever the API guaranteed.
+// Two schemas: CANDIDATE_SET_JSON_SCHEMA (client.ts) is the structural shape sent to the API as the
+// structured-output format. CandidateSetSchema (here) is the strict product rule set that every result
+// must pass before anything is stored, whatever the API guaranteed.
 import { z } from 'zod'
 import { LeverType } from '@prisma/client'
 

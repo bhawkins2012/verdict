@@ -27,17 +27,21 @@ export async function browseCategories() {
  * Search matches categories by name, slug or search term. Unpublished matches are returned too, without a
  * link target, so the UI can say the category is being prepared (product spec, "Search").
  */
+/** Lower case, hyphens and underscores as spaces, single spaces. */
+const searchKey = (s: string) => normalizeName(s.replace(/[-_]+/g, ' '))
+
 export async function searchCategories(q: string) {
-  const needle = normalizeName(q)
+  const needle = searchKey(q)
   if (needle.length < 2) return []
   const all = await prisma.category.findMany({
     orderBy: { name: 'asc' },
     select: { slug: true, name: true, searchTerms: true, leversPublishedAt: true },
   })
   const hits = all.filter((c) =>
-    [c.name, c.slug.replace(/-/g, ' '), ...c.searchTerms].some((t) => {
-      const term = normalizeName(t)
-      return term.includes(needle) || needle.includes(term)
+    [c.name, c.slug, ...c.searchTerms].some((t) => {
+      const term = searchKey(t)
+      // "stroll" finds Strollers; "strollers for twins" finds Strollers too, but only on whole words.
+      return term.includes(needle) || ` ${needle} `.includes(` ${term} `)
     })
   )
   return hits.slice(0, 10).map((c) => ({ slug: c.slug, name: c.name, published: c.leversPublishedAt !== null }))

@@ -1,23 +1,47 @@
 // The one place that talks to the Anthropic API (docs/adr-levers.md D3). Tests inject a fake through
 // setLeverClientForTests; nothing else in the code base constructs an Anthropic client.
 import Anthropic from '@anthropic-ai/sdk'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
-import * as z4 from 'zod/v4'
 import { leverTypes } from './candidates'
 import { LEVER_GEN_EFFORT, LeverConfig } from './config'
 
-/** Structural shape for the API's structured output; candidates.ts holds the strict rules. */
-export const ApiCandidateSetSchema = z4.object({
-  candidates: z4.array(
-    z4.object({
-      name: z4.string(),
-      type: z4.enum(leverTypes),
-      unit: z4.string().nullable(),
-      explanation: z4.string(),
-      relatedNeeds: z4.array(z4.string()),
-    })
-  ),
-})
+/**
+ * Structural JSON schema for the API's structured output (output_config.format), so the API constrains
+ * decoding to this shape. The strict product rules (counts, lengths, unit iff measurement, unique names)
+ * are in candidates.ts and are checked on every result before anything is stored.
+ */
+export const CANDIDATE_SET_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['candidates'],
+  properties: {
+    candidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'type', 'unit', 'explanation', 'relatedNeeds'],
+        properties: {
+          name: { type: 'string' },
+          type: { type: 'string', enum: [...leverTypes] },
+          unit: { type: ['string', 'null'] },
+          explanation: { type: 'string' },
+          relatedNeeds: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+} as const
+
+/** The JSON text of the first text block, parsed; null if there is none or it is not JSON. */
+export function parseJsonText(content: readonly Anthropic.ContentBlock[]): unknown {
+  const text = content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text
+  if (text === undefined) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
 
 export const PROMPT_VERSION = 'levers-v1'
 
@@ -62,19 +86,22 @@ export function userMessage(request: GenerationRequest): string {
   return lines.join('\n')
 }
 
-class AnthropicLeverClient implements LeverGenClient {
+export class AnthropicLeverClient implements LeverGenClient {
+  /** `fetchImpl` lets tests check the exact request without a network call. */
+  constructor(private readonly fetchImpl?: typeof fetch) {}
+
   async generate(request: GenerationRequest, config: LeverConfig): Promise<GenerationResult> {
-    const client = new Anthropic({ apiKey: config.apiKey })
-    const response = await client.messages.parse({
+    const client = new Anthropic({ apiKey: config.apiKey, ...(this.fetchImpl ? { fetch: this.fetchImpl, maxRetries: 0 } : {}) })
+    const response = await client.messages.create({
       model: config.model,
       max_tokens: config.maxTokens,
       thinking: { type: 'adaptive' },
-      output_config: { effort: LEVER_GEN_EFFORT, format: zodOutputFormat(ApiCandidateSetSchema) },
+      output_config: { effort: LEVER_GEN_EFFORT, format: { type: 'json_schema', schema: CANDIDATE_SET_JSON_SCHEMA } },
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage(request) }],
     })
     return {
-      output: response.parsed_output ?? null,
+      output: parseJsonText(response.content),
       stopReason: response.stop_reason,
       servedModel: response.model,
       usage: {
@@ -93,5 +120,8 @@ export function setLeverClientForTests(client: LeverGenClient | null): void {
 }
 
 export function leverClient(): LeverGenClient {
-  return override ?? new AnthropicLeverClient()
+  if (override) return override
+  // Tests inject a fake; this makes it impossible for a test to reach the real API by accident.
+  if (process.env.NODE_ENV === 'test') throw new Error('Tests must inject a lever generation client (setLeverClientForTests)')
+  return new AnthropicLeverClient()
 }
