@@ -78,6 +78,15 @@ Car seat levers are an open decision (see the last section).
 
 Levers are Verdict's main value until its own reviews reach critical mass, so generating them is automated end to end, with a person approving before anything is published. No step depends on scraping third-party review sites.
 
+**Demand-driven categories**
+
+User searches decide which category is built next.
+
+- Every search that matches no published category is logged as an aggregate count per normalized term (lowercased, trimmed, singular). No user id or IP is stored with it.
+- The admin screen shows a weekly ranked list of unmet search terms, with counts and trend, and lets the admin merge synonyms ("pram" into "stroller").
+- One click on a term creates the unpublished category and starts a candidate lever run (pipeline below). An admin can also set a threshold so a term with enough searches starts a run automatically, still requiring approval before anything is published.
+- Users who searched can opt in to be notified when the category goes live, as the search section describes.
+
 **Pipeline per category**
 
 1. **Generate candidates.** A Claude API job takes a category and proposes 10 to 12 candidate levers, each with a type, units, a one-line explanation, and the needs it interacts with (for example air travel raises the importance of weight and fold size).
@@ -216,7 +225,7 @@ Existing entities (users, products, review threads, reviews, nudges) stay. The a
 
 **Phasing**
 
-1. **Phase A, catalog and levers:** categories, the lever-generation pipeline with its admin approval screen, the spec-extraction job, the stroller and car seat lever sets, a seeded catalog with sourced lever values, the wired "Add product" flow, category and product pages. The stroller owner survey runs in parallel.
+1. **Phase A, catalog and levers:** categories, the lever-generation pipeline with its admin approval screen, the spec-extraction job, the stroller and car seat lever sets, a seeded catalog with sourced lever values, the wired "Add product" flow, category and product pages. The stroller owner survey runs in parallel. Demand-driven category logging follows Phase A as a small item.
 2. **Phase B, projects:** the stroller and car seat templates, roadmap UI, travel-system dependency, purchase recording into the review cycle.
 3. **Phase C, ranking:** Top Rated with shrinkage, then Best Fit with the evidence threshold and explanations.
 4. **Phase D, ads half:** only after the concept questions are answered and legal review is done.
