@@ -109,7 +109,9 @@ describe('exactly five published levers', () => {
   it.each([4, 6])('refuses %i levers', async (n) => {
     const c = track(await createCategory())
     const levers = [...(await addCandidates(c.id)), ...(await addCandidates(c.id, undefined, 'More '))]
-    expect((await publish(c.id, levers.slice(0, n).map((l) => l.id))).status).toBe(400)
+    const res = await publish(c.id, levers.slice(0, n).map((l) => l.id))
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('Select exactly 5 different levers')
     expect(await prisma.valueLever.count({ where: { categoryId: c.id, status: LeverStatus.APPROVED } })).toBe(0)
   })
 
@@ -156,6 +158,12 @@ describe('exactly five published levers', () => {
     const [extra] = await addCandidates(category.id, [{ name: 'Sixth', type: 'BOOLEAN', unit: null }])
     await expect(prisma.valueLever.update({ where: { id: extra.id }, data: { status: LeverStatus.APPROVED, approvedAt: new Date() } })).rejects.toThrow()
     await expect(prisma.valueLever.update({ where: { id: extra.id }, data: { status: LeverStatus.APPROVED, position: 6, approvedAt: new Date() } })).rejects.toThrow()
+  })
+
+  it('the database refuses a position on a lever that is not approved', async () => {
+    const c = track(await createCategory())
+    const [cand] = await addCandidates(c.id, [{ name: 'Positioned', type: 'BOOLEAN', unit: null }])
+    await expect(prisma.valueLever.update({ where: { id: cand.id }, data: { position: 1 } })).rejects.toThrow(/position_iff_approved/)
   })
 
   it('an approved lever cannot be retired on its own; a candidate can', async () => {
