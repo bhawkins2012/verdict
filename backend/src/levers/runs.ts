@@ -33,9 +33,18 @@ function inBackground(runId: string, task: () => Promise<unknown>): void {
   inFlight.add(p)
 }
 
-/** Tests (and shutdown) wait for runs started after a response. */
+/** Tests wait for runs started after a response. */
 export async function flushLeverRuns(): Promise<void> {
   while (inFlight.size > 0) await Promise.all([...inFlight])
+}
+
+/** On shutdown: give in-flight runs up to `timeoutMs` to finish (a run cut off is failed as a timeout later). */
+export async function drainLeverRuns(timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<false>((r) => (timer = setTimeout(() => r(false), timeoutMs)))
+  const done = await Promise.race([flushLeverRuns().then(() => true as const), timeout])
+  clearTimeout(timer)
+  return done
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────────────────────────────
@@ -75,7 +84,7 @@ export async function startRun(categoryId: string, userId: string, notes: string
       },
       select: { id: true },
     })
-  })
+  }, { timeout: 15_000 }) // waiting on the advisory lock must not hit Prisma's 5 s default
   if (!run) throw new CategoryNotFoundError()
   logger.info('Lever generation started', { runId: run.id, categoryId, mode })
   inBackground(run.id, () => executeRun(run.id, config))
@@ -117,12 +126,13 @@ export async function executeRun(runId: string, config: LeverConfig): Promise<vo
   const outcome = await callModel(runId, config)
   if ('error' in outcome) return fail(runId, outcome.error, null, null)
 
+  // The served model's price, else the requested model's (the response may name a snapshot of it).
   const usageFields = outcome.usage
     ? {
         inputTokens: outcome.usage.inputTokens,
         outputTokens: outcome.usage.outputTokens,
         cacheReadTokens: outcome.usage.cacheReadTokens,
-        costUsd: estimateCostUsd(outcome.servedModel ?? config.model, outcome.usage),
+        costUsd: (outcome.servedModel ? estimateCostUsd(outcome.servedModel, outcome.usage) : null) ?? estimateCostUsd(config.model, outcome.usage),
       }
     : { costUsd: new Prisma.Decimal(0) }
   if (outcome.usage && usageFields.costUsd === null) {
@@ -139,8 +149,14 @@ export async function executeRun(runId: string, config: LeverConfig): Promise<vo
   }
 
   const stored = await prisma.$transaction(async (tx) => {
+    // Lock the run row, so a concurrent timeout cannot commit between this check and the update.
+    await tx.$queryRaw`SELECT id FROM "lever_candidate_runs" WHERE id = ${runId} FOR UPDATE`
     const run = await tx.leverCandidateRun.findUniqueOrThrow({ where: { id: runId }, select: { categoryId: true, status: true } })
-    if (run.status !== LeverRunStatus.RUNNING) return null // already failed as a timeout
+    if (run.status !== LeverRunStatus.RUNNING) {
+      // Already failed as a timeout: keep that status, but record what the late (billed) call used.
+      await tx.leverCandidateRun.update({ where: { id: runId }, data: { servedModel: outcome.servedModel, ...usageFields } })
+      return null
+    }
     await tx.$queryRaw`SELECT id FROM "categories" WHERE id = ${run.categoryId} FOR UPDATE`
     const existing = await tx.valueLever.findMany({
       where: { categoryId: run.categoryId, status: { not: LeverStatus.RETIRED } },
@@ -185,10 +201,12 @@ async function fail(
   usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; costUsd: Prisma.Decimal | null } | null,
   servedModel: string | null
 ): Promise<void> {
-  await prisma.leverCandidateRun.updateMany({
+  const { count } = await prisma.leverCandidateRun.updateMany({
     where: { id: runId, status: LeverRunStatus.RUNNING },
     data: { status: LeverRunStatus.FAILED, error, servedModel, finishedAt: new Date(), ...(usage ?? {}) },
   })
+  // Already failed as a timeout: keep that error, but still record the usage of the late call.
+  if (count === 0 && usage) await prisma.leverCandidateRun.update({ where: { id: runId }, data: { servedModel, ...usage } })
   logger.warn('Lever generation failed', {
     runId, error, inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens, costUsd: usage?.costUsd?.toString() ?? null,
   })

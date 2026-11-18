@@ -35,9 +35,22 @@ export function slugFromName(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
-async function lockCategory(tx: Tx, categoryId: string): Promise<void> {
+export async function lockCategory(tx: Tx, categoryId: string): Promise<void> {
   const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "categories" WHERE id = ${categoryId} FOR UPDATE`
   if (rows.length === 0) throw new AppError(404, 'Category not found')
+}
+
+/**
+ * Lock the lever's category, then read the lever again inside the lock, so decisions never use a copy
+ * read before a concurrent publish or edit committed.
+ */
+async function lockLever(tx: Tx, leverId: string) {
+  const ref = await tx.valueLever.findUnique({ where: { id: leverId }, select: { categoryId: true } })
+  if (!ref) throw new AppError(404, 'Lever not found')
+  await lockCategory(tx, ref.categoryId)
+  const lever = await tx.valueLever.findUnique({ where: { id: leverId } })
+  if (!lever) throw new AppError(404, 'Lever not found')
+  return lever
 }
 
 async function assertNameFree(tx: Tx, categoryId: string, name: string, exceptId?: string): Promise<void> {
@@ -96,7 +109,7 @@ export async function createLever(categoryId: string, input: z.infer<typeof crea
   const shape: LeverShape = {
     type: input.type,
     inputFormat: input.inputFormat ?? LeverInputFormat.SINGLE,
-    unit: input.type === LeverType.MEASUREMENT ? input.unit ?? null : input.unit ?? null,
+    unit: input.unit ?? null,
     allowedValues: input.allowedValues ?? [],
   }
   checkShape(shape)
@@ -123,9 +136,7 @@ export async function createLever(categoryId: string, input: z.infer<typeof crea
 
 export async function editLever(leverId: string, input: z.infer<typeof editLeverSchema>, userId: string) {
   return prisma.$transaction(async (tx) => {
-    const current = await tx.valueLever.findUnique({ where: { id: leverId } })
-    if (!current) throw new AppError(404, 'Lever not found')
-    await lockCategory(tx, current.categoryId)
+    const current = await lockLever(tx, leverId)
     if (current.status === LeverStatus.RETIRED) throw new AppError(409, 'A retired lever cannot be edited')
 
     const next: LeverShape = {
@@ -173,9 +184,7 @@ export async function editLever(leverId: string, input: z.infer<typeof editLever
 /** Discard a candidate. An approved lever leaves the set only by publishing a set without it. */
 export async function retireLever(leverId: string, userId: string) {
   return prisma.$transaction(async (tx) => {
-    const current = await tx.valueLever.findUnique({ where: { id: leverId }, select: { categoryId: true, status: true } })
-    if (!current) throw new AppError(404, 'Lever not found')
-    await lockCategory(tx, current.categoryId)
+    const current = await lockLever(tx, leverId)
     if (current.status === LeverStatus.APPROVED) {
       throw new AppError(409, 'A published lever cannot be retired on its own: publish a new set of five without it')
     }

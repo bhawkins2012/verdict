@@ -7,7 +7,7 @@ import { loadNudgeConfig } from './nudges/config'
 import { startNudgeRuntime } from './nudges/runtime'
 import { drainAccountEmails } from './auth/mailer'
 import { loadLeverConfig } from './levers/config'
-import { expireStaleRuns } from './levers/runs'
+import { drainLeverRuns, expireStaleRuns } from './levers/runs'
 
 const PORT = process.env.PORT || 3001
 
@@ -57,8 +57,9 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {
     logger.info('Shutting down', { signal })
     server.close()
-    void drainAccountEmails(10_000).then((drained) => {
-      if (!drained) logger.warn('Account emails still in flight at shutdown')
+    void Promise.all([drainAccountEmails(10_000), drainLeverRuns(10_000)]).then(([emails, runs]) => {
+      if (!emails) logger.warn('Account emails still in flight at shutdown')
+      if (!runs) logger.warn('Lever generation runs still in flight at shutdown; they will be failed as timeouts')
       process.exit(0)
     })
   })

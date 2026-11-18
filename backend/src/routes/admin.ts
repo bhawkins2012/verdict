@@ -11,7 +11,7 @@ import { normalizeName } from '../levers/candidates'
 import { loadLeverConfig } from '../levers/config'
 import {
   createCategorySchema, createLever, createLeverSchema, editLever, editLeverSchema, publishLeverSet, publishSchema,
-  retireLever, slugFromName,
+  retireLever, slugFromName, slugSchema,
 } from '../levers/levers'
 import { importLeverValues, importSurvey, setLeverValue } from '../levers/imports'
 import { CategoryNotFoundError, expireStaleRuns, RunLimitError, startRun } from '../levers/runs'
@@ -77,8 +77,10 @@ adminRouter.get('/categories', async (_req: Request, res: Response) => {
 
 adminRouter.post('/categories', async (req: Request, res: Response) => {
   const body = parse(createCategorySchema, req.body)
-  const slug = body.slug ?? slugFromName(body.name)
-  if (slug.length < 2) throw new AppError(400, 'slug: could not derive a slug from the name; give one')
+  // A derived slug passes the same rules as a given one (length, lower-case ASCII, hyphens).
+  const derived = slugSchema.safeParse(body.slug ?? slugFromName(body.name))
+  if (!derived.success) throw new AppError(400, 'slug: could not derive a valid slug from the name; give one (lower-case letters, digits and hyphens)')
+  const slug = derived.data
   const exists = await prisma.category.findUnique({ where: { slug }, select: { id: true } })
   if (exists) throw new AppError(409, `A category with slug "${slug}" already exists`)
   const category = await prisma.category.create({

@@ -45,6 +45,13 @@ export function parseJsonText(content: readonly Anthropic.ContentBlock[]): unkno
 
 export const PROMPT_VERSION = 'levers-v1'
 
+/**
+ * Per-attempt timeout and retries for the API call. Worst case (2 attempts + backoff) stays well under
+ * RUN_TIMEOUT_MS (runs.ts), so a run is never failed as a timeout while a paid request is still running.
+ */
+export const REQUEST_TIMEOUT_MS = 4 * 60 * 1000
+export const MAX_RETRIES = 1
+
 export const SYSTEM_PROMPT = `You propose "value levers" for a product category on Verdict, a product-review site that helps people choose.
 
 A value lever is an attribute that most decides whether a product in the category is right for a particular person. Good levers:
@@ -91,7 +98,12 @@ export class AnthropicLeverClient implements LeverGenClient {
   constructor(private readonly fetchImpl?: typeof fetch) {}
 
   async generate(request: GenerationRequest, config: LeverConfig): Promise<GenerationResult> {
-    const client = new Anthropic({ apiKey: config.apiKey, ...(this.fetchImpl ? { fetch: this.fetchImpl, maxRetries: 0 } : {}) })
+    const client = new Anthropic({
+      apiKey: config.apiKey,
+      timeout: REQUEST_TIMEOUT_MS,
+      maxRetries: this.fetchImpl ? 0 : MAX_RETRIES,
+      ...(this.fetchImpl ? { fetch: this.fetchImpl } : {}),
+    })
     const response = await client.messages.create({
       model: config.model,
       max_tokens: config.maxTokens,

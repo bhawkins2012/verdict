@@ -88,6 +88,14 @@ describe('categories', () => {
     expect(res.body.leversPublishedAt).toBeNull()
     expect((await api().post('/api/admin/categories').set(bearer(admin.accessToken)).send({ name })).status).toBe(409)
   })
+
+  it('a slug derived from a long or non-Latin name must pass the slug rules', async () => {
+    const long = await api().post('/api/admin/categories').set(bearer(admin.accessToken)).send({ name: 'A'.repeat(60) })
+    expect(long.status).toBe(400)
+    const nonLatin = await api().post('/api/admin/categories').set(bearer(admin.accessToken)).send({ name: 'Коляски' })
+    expect(nonLatin.status).toBe(400)
+    expect(nonLatin.body.error).toMatch(/give one/)
+  })
 })
 
 describe('exactly five published levers', () => {

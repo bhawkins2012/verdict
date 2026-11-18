@@ -161,6 +161,22 @@ describe('CSV import of lever values', () => {
     expect(after).toEqual(before)
   })
 
+  it('reports the spreadsheet line of each bad row, counting blank lines and quoted line breaks', async () => {
+    const text = [
+      header,
+      `${otherProduct.id},Colour,red,,,"two`, // a bad row whose quoted detail spans lines 2-3
+      `lines",entered by admin,,`,
+      '',
+      `${otherProduct.id},Colour,red,,,,entered by admin,,`, // line 5, after a blank line
+    ].join('\n')
+    const res = await csv(text)
+    expect(res.status).toBe(400)
+    expect(res.body.rows).toEqual([
+      { row: 2, error: expect.stringMatching(/not a published lever/) },
+      { row: 5, error: expect.stringMatching(/not a published lever/) },
+    ])
+  })
+
   it('refuses a file without the required columns, an empty file and a non-CSV body', async () => {
     expect((await csv('product_id,lever,value\nx,y,z')).body.error).toMatch(/Missing column: source/)
     expect((await csv('product_id,lever,value,source\n')).status).toBe(400)

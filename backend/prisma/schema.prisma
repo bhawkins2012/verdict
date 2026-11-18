@@ -601,7 +601,7 @@ model ProductLeverValue {
   sourceLabel String?
   isSample    Boolean         @default(false)
 
-  recordedById String? // required unless isSample (CHECK in SQL)
+  recordedById String? // set by every API path; null only for seed data outside dev/test, or after the user was deleted
   recordedBy   User?    @relation(fields: [recordedById], references: [id], onDelete: SetNull)
   recordedAt   DateTime @default(now())
 

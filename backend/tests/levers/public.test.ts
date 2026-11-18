@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { LeverStatus } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
 import { api, bearer, cleanup, registerUser } from '../helpers'
@@ -132,6 +133,12 @@ describe('category page filters', () => {
     expect(names(await page(`?lever[${id(2)}][has]=Seat%20A&lever[${id(1)}][max]=20`))).toEqual(['Alpha'])
   })
 
+  it('an empty parameter means no filter, and does not hide unknown values', async () => {
+    expect(names(await page(`?lever[${id(1)}][max]=`))).toEqual(['Alpha', 'Bravo', 'Charlie'])
+    expect(names(await page(`?lever[${id(3)}][in]=`))).toEqual(['Alpha', 'Bravo', 'Charlie'])
+    expect(names(await page(`?lever[${id(1)}][min]=&lever[${id(1)}][max]=20`))).toEqual(['Alpha'])
+  })
+
   it('answers 400, not 500, for bad filters', async () => {
     for (const q of [
       `?lever[nope][min]=1`,
@@ -176,9 +183,12 @@ describe('product page', () => {
 
 describe('POST /api/products categories', () => {
   it('rejects an unknown category with a 400 that lists the valid ones', async () => {
-    const res = await api().post('/api/products').set(bearer(user.accessToken)).send({ name: 'Thing', category: 'gadgets-that-do-not-exist' })
+    const missing = `no-such-category-${randomUUID().slice(0, 8)}` // never left behind by another run
+    const res = await api().post('/api/products').set(bearer(user.accessToken)).send({ name: 'Thing', category: missing })
+    if (res.status === 201) await prisma.product.delete({ where: { id: res.body.id } })
     expect(res.status).toBe(400)
-    expect(res.body.error).toMatch(/Unknown category "gadgets-that-do-not-exist"\. Valid categories: /)
+    expect(res.body.error).toMatch(new RegExp(`Unknown category "${missing}"\\. Valid categories: `))
+    expect(await prisma.category.count({ where: { slug: missing } })).toBe(0)
     expect(res.body.validCategories).toEqual(expect.arrayContaining([ctx.category.slug, hidden.slug]))
   })
 

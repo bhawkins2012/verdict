@@ -50,6 +50,9 @@ describe('configuration', () => {
 
   it('rejects an out-of-range token cap or limit', () => {
     expect(() => loadLeverConfig({ LEVER_GEN_MAX_TOKENS: '100' })).toThrow(/LEVER_GEN_MAX_TOKENS/)
+    // Above ~21333 the SDK refuses non-streaming requests; fail at startup, not on every run.
+    expect(() => loadLeverConfig({ LEVER_GEN_MAX_TOKENS: '21001' })).toThrow(/at most 21000/)
+    expect(loadLeverConfig({ LEVER_GEN_MAX_TOKENS: '21000' }).maxTokens).toBe(21000)
     expect(() => loadLeverConfig({ LEVER_GEN_DAILY_LIMIT: '-1' })).toThrow(/LEVER_GEN_DAILY_LIMIT/)
   })
 })
@@ -144,6 +147,15 @@ describe('live run with a mocked API', () => {
     const run = await runRow((await runFor(c.id)).body.runId)
     expect(run).toMatchObject({ status: LeverRunStatus.FAILED, error: 'api_error:529' })
     expect(JSON.stringify(run)).not.toContain('secret request echo')
+  })
+
+  it('prices a served model name that is not in the table at the requested model\'s price', async () => {
+    liveMode()
+    fakeClient({ output: validCandidates(), servedModel: 'claude-opus-5-5-20261101', usage: { inputTokens: 1000, outputTokens: 5000, cacheReadTokens: 0 } })
+    const c = await newCategory()
+    const run = await runRow((await runFor(c.id)).body.runId)
+    expect(run.servedModel).toBe('claude-opus-5-5-20261101')
+    expect(run.costUsd?.toString()).toBe('0.104')
   })
 
   it('records a null cost for a model without a price', async () => {
@@ -241,8 +253,34 @@ describe('stale runs', () => {
     await expireStaleRuns()
     release()
     await flushLeverRuns()
-    expect(await runRow(res.body.runId)).toMatchObject({ status: LeverRunStatus.FAILED, error: 'timeout' })
+    // The late call was billed: its usage is recorded on the failed run.
+    expect(await runRow(res.body.runId)).toMatchObject({ status: LeverRunStatus.FAILED, error: 'timeout', inputTokens: 1, outputTokens: 1 })
     expect(await candidateCount(c.id)).toBe(0)
+  })
+
+  it('a late failure (e.g. invalid output) also records its usage on a run that already timed out', async () => {
+    liveMode()
+    const c = await newCategory()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => { release = r })
+    const { setLeverClientForTests } = await import('../../src/levers/client')
+    setLeverClientForTests({
+      async generate() {
+        await gate
+        return { output: { candidates: [] }, stopReason: 'end_turn', servedModel: 'claude-opus-5-5', usage: { inputTokens: 7, outputTokens: 9, cacheReadTokens: 0 } }
+      },
+    })
+    const res = await api().post(`/api/admin/categories/${c.id}/runs`).set(bearer(admin.accessToken)).send({})
+    await prisma.leverCandidateRun.update({ where: { id: res.body.runId }, data: { createdAt: new Date(Date.now() - RUN_TIMEOUT_MS - 1000) } })
+    await expireStaleRuns()
+    release()
+    await flushLeverRuns()
+    expect(await runRow(res.body.runId)).toMatchObject({ status: LeverRunStatus.FAILED, error: 'timeout', inputTokens: 7, outputTokens: 9 })
+  })
+
+  it('the API call can never outlast the run timeout (timeout × attempts < RUN_TIMEOUT_MS)', async () => {
+    const { REQUEST_TIMEOUT_MS, MAX_RETRIES } = await import('../../src/levers/client')
+    expect(REQUEST_TIMEOUT_MS * (MAX_RETRIES + 1) + 60_000).toBeLessThan(RUN_TIMEOUT_MS)
   })
 })
 

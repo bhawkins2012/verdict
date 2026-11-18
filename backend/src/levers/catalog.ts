@@ -48,13 +48,16 @@ export async function searchCategories(q: string) {
 }
 
 // ── Category page ────────────────────────────────────────────────────────────────────────────────────
+/** An empty parameter (`max=`) means "not set", never 0. */
+const blank = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v)
+
 const filterSchema = z
   .object({
-    min: z.coerce.number().finite().optional(),
-    max: z.coerce.number().finite().optional(),
-    in: z.string().max(500).optional(),
-    has: z.string().max(120).optional(),
-    is: z.enum(['yes', 'no']).optional(),
+    min: z.preprocess(blank, z.coerce.number().finite().optional()),
+    max: z.preprocess(blank, z.coerce.number().finite().optional()),
+    in: z.preprocess(blank, z.string().max(500).optional()),
+    has: z.preprocess(blank, z.string().max(120).optional()),
+    is: z.preprocess(blank, z.enum(['yes', 'no']).optional()),
   })
   .strict()
 
@@ -62,7 +65,7 @@ const filtersSchema = z.record(z.string().min(1).max(64), filterSchema).optional
 
 type Filters = z.infer<typeof filtersSchema>
 
-function filterClause(lever: PublicLever, f: z.infer<typeof filterSchema>): Prisma.ProductWhereInput {
+function filterClause(lever: PublicLever, f: z.infer<typeof filterSchema>): Prisma.ProductWhereInput | null {
   const given = Object.entries(f).filter(([, v]) => v !== undefined).map(([k]) => k)
   const allowed: Record<LeverType, string[]> = {
     MEASUREMENT: lever.inputFormat === LeverInputFormat.DIMENSIONS ? ['min', 'max', 'is'] : ['min', 'max'],
@@ -92,7 +95,9 @@ function filterClause(lever: PublicLever, f: z.infer<typeof filterSchema>): Pris
       if (f.is !== undefined) value.valueBool = f.is === 'yes'
       break
   }
-  return { leverValues: { some: value } }
+  // A filter with no value set filters nothing (it must not hide products whose value is unknown).
+  const constrained = value.valueNumber !== undefined || value.valueBool !== undefined || value.valueText !== undefined || value.valueList !== undefined
+  return constrained ? { leverValues: { some: value } } : null
 }
 
 export async function categoryPage(slug: string, rawFilters: unknown) {
@@ -111,7 +116,8 @@ export async function categoryPage(slug: string, rawFilters: unknown) {
   for (const [leverId, f] of Object.entries(filters ?? {})) {
     const lever = levers.find((l) => l.id === leverId)
     if (!lever) throw new AppError(400, 'Unknown lever in filter')
-    and.push(filterClause(lever, f))
+    const clause = filterClause(lever, f)
+    if (clause) and.push(clause)
   }
 
   const leverIds = levers.map((l) => l.id)
