@@ -2,6 +2,10 @@
 
 Longitudinal product-review platform. Users review a product at stages (initial, 1 week, 2 weeks, 1 month, … 2 years); the app computes **drift** (how opinion changed) and recommends products using stage-weighted collaborative filtering. Design rationale lives in `docs/architecture.md`; CI in `docs/ci.md`.
 
+## Product
+
+The product spec is docs/product-spec.md; read the relevant section before any feature work.
+
 ## Architecture
 
 ```
