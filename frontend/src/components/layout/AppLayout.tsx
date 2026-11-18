@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp } from 'lucide-react'
+import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp, Shield } from 'lucide-react'
 import { VerificationBanner } from '../account/VerificationBanner'
 import { useAuthStore } from '../../store/authStore'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -79,6 +79,20 @@ export function AppLayout() {
               </span>
             )}
           </NavLink>
+
+          {/* Admins only; the API checks the role on every admin request. */}
+          {user?.role === 'ADMIN' && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) => clsx(
+                'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
+                isActive ? 'bg-ink-900 text-white' : 'text-ink-600 hover:bg-ink-100 hover:text-ink-900'
+              )}
+            >
+              <Shield size={17} />
+              Admin
+            </NavLink>
+          )}
         </nav>
 
         {/* User footer */}

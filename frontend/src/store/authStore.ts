@@ -9,6 +9,8 @@ interface User {
   displayName?: string
   avatarUrl?: string
   demographics?: Record<string, unknown>
+  /** Shows the Admin link only; the API checks the role on every admin request. */
+  role?: 'USER' | 'ADMIN'
 }
 
 interface AuthState {

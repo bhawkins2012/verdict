@@ -185,7 +185,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   })
 
   res.json({
-    user: { id: user.id, email: user.email, username: user.username, displayName: user.displayName },
+    user: { id: user.id, email: user.email, username: user.username, displayName: user.displayName, role: user.role },
     accessToken,
     refreshToken,
   })
