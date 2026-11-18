@@ -111,12 +111,30 @@ Search and browse products.
 ---
 
 ### GET /products/:id
-Get full product details.
+Get full product details. Since Phase A it also returns `levers`: the five published levers of the product's category (empty if the category has none), each with this product's value and source, and the category typical value (median) for measurements.
+
+```json
+{
+  "id": "…", "name": "Breeze City Compact", "category": "strollers", "categoryId": "…",
+  "levers": [
+    {
+      "lever": { "id": "…", "name": "Fold size", "type": "MEASUREMENT", "inputFormat": "DIMENSIONS", "unit": "cu ft",
+                 "explanation": "…", "allowedValues": [], "position": 1 },
+      "value": { "unknown": false, "number": 1.86, "unit": "cu ft", "text": null, "bool": true, "list": [],
+                 "dimensions": { "lengthIn": 21, "widthIn": 17, "heightIn": 9 }, "detail": null,
+                 "source": { "type": "ADMIN_ENTERED", "url": null, "label": "Sample data" },
+                 "isSample": true, "recordedAt": "…" },
+      "typical": 2.92
+    }
+  ]
+}
+```
+`value` is `null` when nothing is recorded; `unknown: true` is an explicit unknown. For a `DIMENSIONS` lever, `number` is the folded volume computed from the dimensions and `bool` is one-hand fold.
 
 ---
 
 ### POST /products *(auth)*
-Add a new product.
+Add a new product. `category` must be an existing category slug (case-insensitive); an unknown one is **400** `Unknown category "x". Valid categories: …` with `validCategories: [...]`. Only admins create categories. Fields not listed below are ignored.
 
 **Body:**
 ```json
@@ -134,7 +152,68 @@ Add a new product.
 ---
 
 ### GET /products/categories/list
-List all categories with counts.
+Categories to browse, with product counts: only categories with published levers (`[{ "name": "<slug>", "count": 4 }]`). Kept for older clients; use `GET /categories`.
+
+---
+
+## Categories (public)
+
+Design: `docs/adr-levers.md`. Levers in these responses are always the five approved (published) levers; candidates and retired levers never appear.
+
+### GET /categories
+Categories with published levers: `[{ "slug": "strollers", "name": "Strollers", "productCount": 4 }]`. Categories without published levers are hidden from browse.
+
+### GET /categories/search?q=
+Categories whose name, slug or search terms match `q` (at least 2 characters; a category term inside a longer query matches on whole words). Includes categories still being prepared: `[{ "slug": "car-seats", "name": "Car seats", "published": false }]`; the UI says those are being prepared and does not link them.
+
+### GET /categories/:slug
+The category page: `{ category, levers, products, totalInCategory, sort }`. 404 for an unknown category or one without published levers.
+
+- `levers[]`: the five levers in order, each with `options` for building filters: `{ min, max }` for measurements, `{ values }` (known items) for compatibility lists, `null` otherwise.
+- `products[]` (at most 100, sorted by name until Best Fit ships): `{ id, name, brand, imageUrl, avgRatingLongterm, totalReviewCount, values: { <leverId>: value } }`.
+- **Filters** (query string, qs nested syntax), combined with AND; a product with an unknown or missing value never matches an active filter:
+
+| Lever type | Parameters |
+|---|---|
+| Measurement | `lever[<id>][min]`, `lever[<id>][max]` (for fold size: the computed volume); a dimensions lever also takes `lever[<id>][is]=yes|no` (one-hand fold) |
+| Category | `lever[<id>][in]=Rubber,Foam-filled` (allowed values, case-insensitive) |
+| Compatibility list | `lever[<id>][has]=<item>` |
+| Yes / no | `lever[<id>][is]=yes|no` |
+
+An unknown lever id, a parameter that does not apply to the lever's type or a bad value is **400**.
+
+---
+
+## Admin *(auth + admin)*
+
+Every route under `/admin` answers 401 without a token and 403 unless the user's role (read from the database on each request) is `ADMIN`. Roles are granted only with `npm run admin:grant -- <email>` (backend), or the seeded `admin@example.com` in development and test. Design: `docs/adr-levers.md`.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /admin/config` | `{ mode: "dry_run" \| "live", model, dailyLimit, maxTokens }` |
+| `GET /admin/categories` | All categories with approved/candidate/product counts |
+| `POST /admin/categories` | `{ name, slug?, searchTerms? }` → 201; slug derived from the name if omitted; 409 if taken |
+| `GET /admin/categories/:id` | Levers (all statuses, with approval/edit records, value counts and the matching survey ranking), last 10 runs, newest survey (with unmatched rows), products |
+| `POST /admin/categories/:id/runs` | `{ notes? }` (≤ 1000 chars) → **202** `{ runId, mode }`; the run continues after the response. **429** `{ error, retryAt }` over the daily live-run limit |
+| `GET /admin/runs/:id` | Run status (`RUNNING` / `SUCCEEDED` / `FAILED` with `error`), model, tokens, `costUsd`, candidates stored. Runs older than 10 minutes still `RUNNING` are failed as `timeout` first |
+| `POST /admin/categories/:id/levers` | Add a lever by hand: `{ name, type, inputFormat?, unit?, explanation, relatedNeeds?, allowedValues? }` → 201 candidate |
+| `PATCH /admin/levers/:id` | Edit name, type, inputFormat, unit, explanation, relatedNeeds, allowedValues. Type, unit and input format are locked once the lever has values (409) |
+| `POST /admin/levers/:id/retire` | Retire a candidate; 409 for a published lever (publish a set without it instead) |
+| `POST /admin/categories/:id/publish` | `{ leverIds: [5 ids in order] }`: approves and publishes exactly these five, retires the previous set, in one transaction. 400 unless exactly five distinct, non-retired levers of this category, with ≥ 2 allowed values for category levers |
+| `POST /admin/categories/:id/survey?filename=` | Body: CSV text (`Content-Type: text/csv`, ≤ 1 MB) with columns `lever, rank, respondents` → 201. All or nothing: 400 `{ error, rows: [{ row, error }] }` |
+| `GET /admin/products/:id/levers` | The product's published levers with current values, sources and who recorded them |
+| `PUT /admin/products/:productId/levers/:leverId` | Set one value (below) |
+| `POST /admin/categories/:id/lever-values/import[?dryRun=true]` | Body: CSV text. All or nothing; `dryRun=true` validates only. → `{ valid, rows, imported }` or 400 with `rows` |
+
+**Value body** (`PUT /admin/products/:productId/levers/:leverId`): `source` is required, with no default.
+
+```json
+{ "number": 14.5, "source": { "type": "URL", "url": "https://maker.example/spec" }, "sourceLabel": "Spec page", "detail": "…" }
+```
+
+By lever type: measurement `number` (+ optional `unit`, which must equal the lever's); dimensions `dimensions: { lengthIn, widthIn, heightIn }` and `oneHandFold` (the volume is computed, never sent); category `text` (an allowed value); compatibility list `list: [...]`; yes/no `bool`; or `unknown: true` with no value. `source` is `{ "type": "URL", "url": "https://…" }` (http or https only) or `{ "type": "ADMIN_ENTERED" }`.
+
+**Lever value CSV** columns: `product_id, lever, value, source` (required), `unit, unknown, detail, source_label, one_hand_fold` (optional). `lever` is the lever name; `source` is a URL or `entered by admin`; lists use `|`; fold size is `L x W x H` in inches; `unknown` and `one_hand_fold` take yes/no.
 
 ---
 

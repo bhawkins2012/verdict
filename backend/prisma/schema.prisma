@@ -40,11 +40,23 @@ model User {
   // When the address was last verified (docs/adr-email-verification.md); emailVerified stays the gate.
   emailVerifiedAt           DateTime?
 
+  // Admin rights (docs/adr-levers.md D1). Read from the database on every admin request, never from the JWT.
+  role UserRole @default(USER)
+
   demographics       UserDemographics?
   reviewThreads      ReviewThread[]
   refreshTokens      RefreshToken[]
   nudges             Nudge[]
   verificationTokens EmailVerificationToken[]
+
+  createdCategories   Category[]          @relation("CategoryCreatedBy")
+  publishedCategories Category[]          @relation("CategoryLeversPublishedBy")
+  approvedLevers      ValueLever[]        @relation("LeverApprovedBy")
+  retiredLevers       ValueLever[]        @relation("LeverRetiredBy")
+  editedLevers        ValueLever[]        @relation("LeverEditedBy")
+  leverRuns           LeverCandidateRun[]
+  surveyImports       SurveyImport[]
+  recordedLeverValues ProductLeverValue[]
 
   @@map("users")
 }
@@ -76,7 +88,11 @@ model Product {
   id          String     @id @default(cuid())
   name        String
   brand       String?
-  category    String // "electronics", "kitchen", "travel", etc.
+  // Kept equal to the category's slug on every write: the ML service and older filters read this string.
+  // categoryId is the real link (docs/adr-levers.md D2); removing this column is in the backlog.
+  category    String
+  categoryId  String?
+  categoryRef Category?  @relation(fields: [categoryId], references: [id])
   subcategory String?
   description String?
   imageUrl    String?
@@ -97,6 +113,7 @@ model Product {
 
   reviewThreads     ReviewThread[]
   aggregatedReviews AggregatedReview[]
+  leverValues       ProductLeverValue[]
 
   // Computed fields updated by background jobs
   avgRatingInitial  Float?
@@ -105,6 +122,7 @@ model Product {
   totalReviewCount  Int    @default(0)
 
   @@index([category])
+  @@index([categoryId])
   @@index([brand])
   @@map("products")
 }
@@ -386,4 +404,208 @@ model EmailRateEvent {
 
   @@index([kind, key, createdAt])
   @@map("email_rate_events")
+}
+
+// ─────────────────────────────────────────
+// CATEGORIES & VALUE LEVERS (docs/adr-levers.md)
+// ─────────────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum LeverType {
+  MEASUREMENT
+  CATEGORY
+  COMPATIBILITY_LIST
+  BOOLEAN
+}
+
+// How a MEASUREMENT lever's value is recorded. DIMENSIONS: folded length, width and height in inches plus
+// an optional one-hand-fold flag; the filterable number is the volume computed from them (cu ft), never
+// entered by hand.
+enum LeverInputFormat {
+  SINGLE
+  DIMENSIONS
+}
+
+enum LeverStatus {
+  CANDIDATE
+  APPROVED // approved = published: always exactly 0 or 5 per category (deferred trigger in SQL)
+  RETIRED
+}
+
+enum LeverOrigin {
+  GENERATED
+  ADMIN
+}
+
+enum LeverRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum LeverRunMode {
+  LIVE
+  DRY_RUN
+}
+
+enum ValueSourceType {
+  URL
+  ADMIN_ENTERED
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  slug        String   @unique // lower(btrim(...)); also the value of Product.category
+  name        String
+  searchTerms String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdById String?
+  createdBy   User?    @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Set when a set of five levers is published. Null: the category is hidden from browse.
+  leversPublishedAt   DateTime?
+  leversPublishedById String?
+  leversPublishedBy   User?     @relation("CategoryLeversPublishedBy", fields: [leversPublishedById], references: [id], onDelete: SetNull)
+
+  products      Product[]
+  levers        ValueLever[]
+  runs          LeverCandidateRun[]
+  surveyImports SurveyImport[]
+
+  @@map("categories")
+}
+
+model ValueLever {
+  id         String   @id @default(cuid())
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  name          String
+  type          LeverType
+  inputFormat   LeverInputFormat @default(SINGLE)
+  unit          String? // MEASUREMENT only (CHECK in SQL)
+  explanation   String
+  relatedNeeds  String[]
+  allowedValues String[] // CATEGORY only; required (>= 2) to publish
+
+  status   LeverStatus        @default(CANDIDATE)
+  position Int? // 1-5, set exactly when APPROVED (CHECK in SQL)
+  origin   LeverOrigin
+  runId    String?
+  run      LeverCandidateRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  approvedById String?
+  approvedBy   User?     @relation("LeverApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  retiredById  String?
+  retiredBy    User?     @relation("LeverRetiredBy", fields: [retiredById], references: [id], onDelete: SetNull)
+  retiredAt    DateTime?
+  editedById   String?
+  editedBy     User?     @relation("LeverEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
+  editedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  values ProductLeverValue[]
+
+  // NULL positions (candidates, retired) never collide in Postgres.
+  @@unique([categoryId, position])
+  @@index([categoryId, status])
+  @@map("value_levers")
+}
+
+model LeverCandidateRun {
+  id          String   @id @default(cuid())
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  mode        LeverRunMode
+  status      LeverRunStatus @default(RUNNING)
+  model       String // requested model, or "dry-run"
+  servedModel String? // model named in the API response
+  input       Json // prompt version, category, notes, max tokens, effort
+  output      Json? // validated candidates; null on failure
+  error       String? // short reason on failure; never a key or a raw response body
+
+  inputTokens     Int?
+  outputTokens    Int?
+  cacheReadTokens Int?
+  costUsd         Decimal? @db.Decimal(10, 6)
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  levers ValueLever[]
+
+  @@index([mode, createdAt])
+  @@index([categoryId, createdAt])
+  @@map("lever_candidate_runs")
+}
+
+model SurveyImport {
+  id           String   @id @default(cuid())
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  filename     String
+  uploadedById String?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt   DateTime @default(now())
+  rowCount     Int
+
+  rankings SurveyRanking[]
+
+  @@index([categoryId, uploadedAt])
+  @@map("survey_imports")
+}
+
+model SurveyRanking {
+  id              String       @id @default(cuid())
+  importId        String
+  import          SurveyImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  leverName       String
+  rank            Int
+  respondentCount Int
+
+  @@index([importId])
+  @@map("survey_rankings")
+}
+
+model ProductLeverValue {
+  id        String     @id @default(cuid())
+  productId String
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  leverId   String
+  lever     ValueLever @relation(fields: [leverId], references: [id], onDelete: Cascade)
+
+  isUnknown   Boolean  @default(false)
+  valueNumber Float? // MEASUREMENT (for DIMENSIONS: the computed volume in cu ft)
+  unit        String?
+  valueText   String? // CATEGORY: one of the lever's allowedValues
+  valueBool   Boolean? // BOOLEAN; DIMENSIONS: one-hand fold
+  valueList   String[] // COMPATIBILITY_LIST
+  dimLengthIn Float? // DIMENSIONS only
+  dimWidthIn  Float?
+  dimHeightIn Float?
+  detail      String?
+
+  sourceType  ValueSourceType
+  sourceUrl   String? // required exactly when sourceType = URL (CHECK in SQL)
+  sourceLabel String?
+  isSample    Boolean         @default(false)
+
+  recordedById String? // set by every API path; null only for seed data outside dev/test, or after the user was deleted
+  recordedBy   User?    @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedAt   DateTime @default(now())
+
+  @@unique([productId, leverId])
+  @@index([leverId])
+  @@map("product_lever_values")
 }

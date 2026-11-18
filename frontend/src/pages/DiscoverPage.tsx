@@ -4,22 +4,31 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { Product } from '../types'
 import { DriftBadge } from '../components/ui/DriftBadge'
-import { Search, Plus } from 'lucide-react'
-import clsx from 'clsx'
+import { Search, Plus, ArrowRight, Clock } from 'lucide-react'
+import { BrowseCategory, CategorySearchHit } from '../types/levers'
 
 export function DiscoverPage() {
   const [search, setSearch] = useState('')
-  const [category, setCategory] = useState('')
 
   const { data, isLoading } = useQuery({
-    queryKey: ['products', search, category],
-    queryFn: () => api.get('/products', { params: { q: search || undefined, category: category || undefined } }).then(r => r.data),
+    queryKey: ['products', search],
+    queryFn: () => api.get('/products', { params: { q: search || undefined } }).then(r => r.data),
     staleTime: 30_000,
   })
 
-  const { data: categories } = useQuery<{ name: string; count: number }[]>({
+  // Browse: only categories with published levers.
+  const { data: categories } = useQuery<BrowseCategory[]>({
     queryKey: ['categories'],
-    queryFn: () => api.get('/products/categories/list').then(r => r.data),
+    queryFn: () => api.get('/categories').then(r => r.data),
+  })
+
+  // Search matches categories first, including ones still being prepared (product spec, "Search").
+  const term = search.trim()
+  const { data: categoryHits } = useQuery<CategorySearchHit[]>({
+    queryKey: ['category-search', term],
+    queryFn: () => api.get('/categories/search', { params: { q: term } }).then(r => r.data),
+    enabled: term.length >= 2,
+    staleTime: 30_000,
   })
 
   const products: Product[] = data?.products || []
@@ -41,28 +50,41 @@ export function DiscoverPage() {
         <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400" />
         <input
           className="input pl-10"
-          placeholder="Search products..."
+          placeholder="Search categories and products..."
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
       </div>
 
-      {/* Category filters */}
+      {/* Categories matching the search come first */}
+      {term.length >= 2 && categoryHits && categoryHits.length > 0 && (
+        <div className="space-y-2 mb-6" aria-label="Matching categories">
+          {categoryHits.map((c) => c.published ? (
+            <Link key={c.slug} to={`/categories/${c.slug}`} className="card p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
+              <span className="font-medium text-ink-900">{c.name}</span>
+              <span className="text-sm text-ink-500">Compare by the five things that matter most</span>
+              <ArrowRight size={16} className="ml-auto text-ink-400" />
+            </Link>
+          ) : (
+            <div key={c.slug} className="card p-4 flex items-center gap-3 bg-ink-50">
+              <Clock size={16} className="text-ink-400" />
+              <span className="font-medium text-ink-700">{c.name}</span>
+              <span className="text-sm text-ink-500">This category is being prepared. Check back soon.</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Browse categories */}
       <div className="flex gap-2 flex-wrap mb-6">
-        <button
-          onClick={() => setCategory('')}
-          className={clsx('stage-badge border cursor-pointer', !category ? 'bg-ink-900 text-white border-ink-900' : 'bg-white text-ink-600 border-ink-200 hover:bg-ink-50')}
-        >
-          All
-        </button>
         {categories?.map((c) => (
-          <button
-            key={c.name}
-            onClick={() => setCategory(c.name === category ? '' : c.name)}
-            className={clsx('stage-badge border cursor-pointer capitalize', c.name === category ? 'bg-ink-900 text-white border-ink-900' : 'bg-white text-ink-600 border-ink-200 hover:bg-ink-50')}
+          <Link
+            key={c.slug}
+            to={`/categories/${c.slug}`}
+            className="stage-badge border cursor-pointer bg-white text-ink-600 border-ink-200 hover:bg-ink-50"
           >
-            {c.name} <span className="text-ink-400 ml-0.5">({c.count})</span>
-          </button>
+            {c.name} <span className="text-ink-400 ml-0.5">({c.productCount})</span>
+          </Link>
         ))}
       </div>
 

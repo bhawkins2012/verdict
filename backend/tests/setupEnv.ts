@@ -13,3 +13,8 @@ process.env.VERIFY_RATE_LIMIT_MAX = '10000'
 // Tests must not depend on where they run: inside a GitHub Codespace these would turn every emailed link
 // into the forwarded https address (src/lib/frontendUrl.ts). Tests that need them set them explicitly.
 for (const k of ['CODESPACE_NAME', 'GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN', 'FRONTEND_PORT', 'FRONTEND_URL']) delete process.env[k]
+// Lever generation: dry run, and an empty key so a real ANTHROPIC_API_KEY in backend/.env is never loaded
+// (dotenv does not override variables that are already set). Live-mode tests inject a fake client, and
+// the real client refuses to start under NODE_ENV=test.
+process.env.LEVER_GEN_MODE = 'dry_run'
+process.env.ANTHROPIC_API_KEY = ''

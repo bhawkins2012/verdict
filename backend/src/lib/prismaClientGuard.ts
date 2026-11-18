@@ -8,7 +8,7 @@
 // Two checks, both at boot:
 // 1. When the source schema and the generated client's copy of it are both on disk (dev, Codespaces, CI,
 //    a dist/ build run from the repo), they must be identical: this catches ANY model or field change.
-// 2. REQUIRED lists what the nudge engine and email verification read and write, checked against the
+// 2. REQUIRED lists what the nudge engine, email verification and value levers read and write, checked against the
 //    loaded client's datamodel: it also works where the schema file is not shipped. Adding a field to that
 //    code? Add it here; tests/prismaClientGuard.test.ts checks this list against schema.prisma.
 import fs from 'fs'
@@ -18,8 +18,9 @@ import { Prisma } from '@prisma/client'
 export const REQUIRED_MODELS: Record<string, readonly string[]> = {
   User: [
     'email', 'emailVerified', 'emailVerifiedAt', 'emailNudgesEnabled', 'emailNudgesConsentAt',
-    'emailNudgesFirstEnabledAt', 'nudgePromptDismissedAt', 'timezone', 'nudgeSendHour', 'passwordHash',
+    'emailNudgesFirstEnabledAt', 'nudgePromptDismissedAt', 'timezone', 'nudgeSendHour', 'passwordHash', 'role',
   ],
+  Product: ['category', 'categoryId'],
   ReviewThread: ['purchasedAt', 'startedAt', 'stagesCompleted'],
   Review: ['stage', 'capturedAt'],
   Nudge: [
@@ -28,6 +29,22 @@ export const REQUIRED_MODELS: Record<string, readonly string[]> = {
   ],
   EmailVerificationToken: ['userId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'usedAt', 'supersededAt'],
   EmailRateEvent: ['kind', 'key', 'createdAt', 'sentAt'],
+  Category: ['slug', 'name', 'searchTerms', 'createdById', 'leversPublishedAt', 'leversPublishedById'],
+  ValueLever: [
+    'categoryId', 'name', 'type', 'inputFormat', 'unit', 'explanation', 'relatedNeeds', 'allowedValues', 'status',
+    'position', 'origin', 'runId', 'approvedById', 'approvedAt', 'retiredById', 'retiredAt', 'editedById', 'editedAt',
+  ],
+  LeverCandidateRun: [
+    'categoryId', 'createdById', 'mode', 'status', 'model', 'servedModel', 'input', 'output', 'error',
+    'inputTokens', 'outputTokens', 'cacheReadTokens', 'costUsd', 'createdAt', 'finishedAt',
+  ],
+  SurveyImport: ['categoryId', 'filename', 'uploadedById', 'uploadedAt', 'rowCount'],
+  SurveyRanking: ['importId', 'leverName', 'rank', 'respondentCount'],
+  ProductLeverValue: [
+    'productId', 'leverId', 'isUnknown', 'valueNumber', 'unit', 'valueText', 'valueBool', 'valueList',
+    'dimLengthIn', 'dimWidthIn', 'dimHeightIn', 'detail', 'sourceType', 'sourceUrl', 'sourceLabel', 'isSample',
+    'recordedById', 'recordedAt',
+  ],
 }
 
 export const REQUIRED_ENUMS: Record<string, readonly string[]> = {
@@ -36,6 +53,14 @@ export const REQUIRED_ENUMS: Record<string, readonly string[]> = {
   NudgeEndReason: ['REVIEW_SUBMITTED', 'SUPERSEDED', 'USER_SKIPPED'],
   NudgeStatus: ['PENDING', 'SENDING', 'SENT', 'COMPLETED', 'SKIPPED', 'CANCELLED', 'FAILED'],
   EmailRateKind: ['VERIFICATION_EMAIL', 'SIGNUP_ATTEMPT_EMAIL', 'EMAIL_CHANGE_ATTEMPT'],
+  UserRole: ['USER', 'ADMIN'],
+  LeverType: ['MEASUREMENT', 'CATEGORY', 'COMPATIBILITY_LIST', 'BOOLEAN'],
+  LeverInputFormat: ['SINGLE', 'DIMENSIONS'],
+  LeverStatus: ['CANDIDATE', 'APPROVED', 'RETIRED'],
+  LeverOrigin: ['GENERATED', 'ADMIN'],
+  LeverRunStatus: ['RUNNING', 'SUCCEEDED', 'FAILED'],
+  LeverRunMode: ['LIVE', 'DRY_RUN'],
+  ValueSourceType: ['URL', 'ADMIN_ENTERED'],
 }
 
 export const OUT_OF_DATE_MESSAGE = 'Prisma client is out of date: run npx prisma generate (in backend/: cd backend && npx prisma generate)'

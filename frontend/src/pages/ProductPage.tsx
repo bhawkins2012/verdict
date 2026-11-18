@@ -5,6 +5,7 @@ import { Product, ReviewThread } from '../types'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
 import { ArrowLeft, Star, Plus } from 'lucide-react'
+import { KeySpecs } from '../components/levers/KeySpecs'
 
 export function ProductPage() {
   const { id } = useParams<{ id: string }>()
@@ -71,6 +72,8 @@ export function ProductPage() {
           <span className="text-sm text-ink-400 ml-auto">{product.totalReviewCount} reviews</span>
         </div>
       </div>
+
+      <KeySpecs levers={product.levers ?? []} categorySlug={product.category} />
 
       {stats?.survivorshipCurve?.length >= 2 && (
         <div className="card p-6 mb-6">

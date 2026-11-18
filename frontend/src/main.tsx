@@ -16,6 +16,10 @@ import { WriteReviewPage } from './pages/WriteReviewPage'
 import { RecommendationsPage } from './pages/RecommendationsPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { VerifyEmailPage } from './pages/VerifyEmailPage'
+import { CategoryPage } from './pages/CategoryPage'
+import { AdminCategoriesPage } from './pages/admin/AdminCategoriesPage'
+import { AdminCategoryPage } from './pages/admin/AdminCategoryPage'
+import { AdminProductLeversPage } from './pages/admin/AdminProductLeversPage'
 import { useAuthStore } from './store/authStore'
 
 const queryClient = new QueryClient({
@@ -27,6 +31,13 @@ const queryClient = new QueryClient({
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
   if (!isAuthenticated) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+/** Hides admin pages from non-admins. Cosmetic only: the API checks the role on every admin request. */
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore()
+  if (user?.role !== 'ADMIN') return <Navigate to="/dashboard" replace />
   return <>{children}</>
 }
 
@@ -53,6 +64,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/products/:id/review" element={<WriteReviewPage />} />
             <Route path="/recommendations" element={<RecommendationsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/categories/:slug" element={<CategoryPage />} />
+            <Route path="/admin" element={<AdminRoute><AdminCategoriesPage /></AdminRoute>} />
+            <Route path="/admin/categories/:id" element={<AdminRoute><AdminCategoryPage /></AdminRoute>} />
+            <Route path="/admin/products/:id" element={<AdminRoute><AdminProductLeversPage /></AdminRoute>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

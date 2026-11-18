@@ -185,7 +185,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   })
 
   res.json({
-    user: { id: user.id, email: user.email, username: user.username, displayName: user.displayName },
+    user: { id: user.id, email: user.email, username: user.username, displayName: user.displayName, role: user.role },
     accessToken,
     refreshToken,
   })
@@ -240,7 +240,7 @@ authRouter.get('/me', authenticate, async (req: Request, res: Response) => {
     select: {
       id: true, email: true, username: true, displayName: true,
       avatarUrl: true, createdAt: true, emailVerified: true, emailVerifiedAt: true,
-      demographics: true,
+      demographics: true, role: true,
     }
   })
   if (!user) throw new AppError(404, 'User not found')

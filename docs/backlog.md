@@ -27,6 +27,10 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 | 12 | 13 | [Rename the email provider settings to `EMAIL_*`](#13-rename-the-email-provider-settings-to-email_) | S | Naming only; account emails now share the nudge settings |
 | 13 | 14 | [Opt-in prompt follow-ups from the Sprint 2 review](#14-opt-in-prompt-follow-ups-from-the-sprint-2-review) | S | Small; one is a real gap (prompt never shown for a later-stage first review) |
 | 2* | 15 | [Unverified accounts can squat an address](#15-unverified-accounts-can-squat-an-address) | M | Security; rank right after #4 (needs password reset or expiry of unverified accounts) |
+| P1 | 16 | [Car seat value levers](#16-car-seat-value-levers) | S | Phase A; the category exists, needs a live generation run and approval |
+| P2 | 17 | [Spec extraction from manufacturer pages](#17-spec-extraction-from-manufacturer-pages) | L | Phase A; fills lever values at scale; needs sourcing rules applied per site |
+| P3 | 18 | [Licensed-search review synthesis](#18-licensed-search-review-synthesis) | L | Phase A; blocked on a licensed search provider and counsel sign-off |
+| P4 | 19 | [Remove `Product.category` once the ML service reads `categoryId`](#19-remove-productcategory-once-the-ml-service-reads-categoryid) | S | Cleanup; two sources of truth for a product's category until then |
 
 ---
 
@@ -214,6 +218,57 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 
 ---
 
+## 16. Car seat value levers
+**Size:** S (Phase A, after `phase-a-levers`)
+
+**Problem.** The spec leaves the car seat levers open. The `car-seats` category exists (seeded, unpublished, no levers) so a live generation run can propose candidates once an `ANTHROPIC_API_KEY` is set.
+
+**Acceptance criteria**
+- A live run for car seats (`LEVER_GEN_MODE=live`) produces 10 to 12 candidates; tokens and cost are recorded.
+- An admin edits, picks and orders five, and publishes them; the approval record names the admin.
+- The car seat owner survey (if run) is imported and shown next to the candidates before publishing.
+- Product values for the launch car seats are entered with sources (form or CSV).
+
+---
+
+## 17. Spec extraction from manufacturer pages
+**Size:** L (Phase A; product spec, "Lever generation and review synthesis", step 4)
+
+**Problem.** Lever values are entered by hand or imported from CSV. The spec calls for an extraction job that reads manufacturer spec pages and manuals reached by permitted routes, stores a source link per value, and has a person spot-check a sample before publishing.
+
+**Acceptance criteria**
+- A job takes a product and a manufacturer URL, fetches only pages whose terms and robots.txt permit it (no logins, no CAPTCHA or rate-limit circumvention), and proposes values for the five levers with the exact source URL per value.
+- Proposed values are not public until an admin accepts them (same rule as levers); accepted values go through the existing value validation (`toValueData`) and carry `sourceType: URL`.
+- A spot-check view samples proposed values per category; the decision is recorded.
+- Tests with recorded fixtures; no network in CI.
+
+---
+
+## 18. Licensed-search review synthesis
+**Size:** L (Phase A; blocked on a provider decision and counsel)
+
+**Problem.** The product page should show "What expert reviewers say": a short paraphrased summary per lever from expert and publisher reviews that permit it, each claim linked to its source, found through a licensed search API. Verdict stores the summary and links, never the source text.
+
+**Acceptance criteria**
+- Provider chosen whose license covers Verdict's commercial use (open decision in the spec); counsel signs off on the method before anything is public.
+- A job builds the summary per product and lever with Claude; every claim links to its source; reviewer names and personal details are never stored.
+- The product page shows the block only under the "What expert reviewers say" label, visually separate from Verdict reviews; unapproved summaries are never public.
+- Tests with recorded fixtures; no network in CI.
+
+---
+
+## 19. Remove `Product.category` once the ML service reads `categoryId`
+**Size:** S (cleanup after `phase-a-levers`)
+
+**Problem.** Products now link to a `Category` row (`categoryId`), but the free-text `Product.category` stays because the ML service (`ml/main.py`, `models/recommender.py`) and the older `GET /api/products?category=` filter read it. The API keeps the string equal to the category slug on every write, so there are two sources of truth until it is removed.
+
+**Acceptance criteria**
+- The ML service filters by `categoryId` (SQL quotes `"categoryId"`), with its tests updated.
+- `GET /api/products?category=` and the recommendations route filter by category slug through `categoryId`.
+- A migration makes `products.categoryId` required and drops `products.category`; `migrate diff` is empty.
+
+---
+
 ## Also noted (smaller, not yet itemized)
 - `frontend/tsconfig.node.json` (the Vite config and `devServerPort.ts`) is never type-checked: `npm run typecheck`/`build` run plain `tsc`, which skips project references, and it has no Node types (`Cannot find module 'path'` on `main`). Add Node types and check it in CI.
 - In CI the backend `pretest` hook runs `prisma generate` a second time after the explicit step (harmless, ~150 ms).
@@ -222,3 +277,4 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 - The frontend production build warns about a chunk over 500 kB; route-level code splitting would fix it.
 - `npm ci` warns that ESLint 9 is no longer supported; plan the ESLint 10 upgrade.
 - `npm run dev:ml` calls bare `uvicorn` and fails unless the ML virtualenv is active (CLAUDE.md, "Known gaps").
+- Value levers (Phase A follow-ups): lever value history is not kept (only the current value with who/when, ADR Q11); the category page lists at most 100 products and sorts by name until Best Fit (Phase C); the one-hand-fold flag of a dimensions lever has a filter but no separate column on the product list; Swagger (`/api/docs`) does not describe the new category and admin routes yet (`docs/api.md` does).

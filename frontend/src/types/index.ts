@@ -1,3 +1,4 @@
+import type { ProductLever } from './levers'
 export type ReviewStage =
   | 'INITIAL'
   | 'ONE_WEEK'
@@ -75,6 +76,8 @@ export interface Product {
   avgRatingLongterm?: number
   driftScoreAvg?: number
   totalReviewCount: number
+  /** GET /api/products/:id only: the category's published levers with this product's values. */
+  levers?: ProductLever[]
 }
 
 export interface Nudge {
