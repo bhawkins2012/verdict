@@ -1,6 +1,6 @@
 # ADR: Categories, value levers and lever generation (Phase A core)
 
-**Status:** proposed (Phase A, branch `phase-a-levers`). Product rules: `docs/product-spec.md`, sections "Reviews half: search, value levers, product pages" and "Lever generation and review synthesis". Open questions are in section 5, each with a recommended default in **bold**.
+**Status:** accepted with changes (Phase A, branch `phase-a-levers`). The answers to the open questions and the changes made during implementation are in section 6; where section 6 differs from sections 2 to 5, section 6 wins. Product rules: `docs/product-spec.md`, sections "Reviews half: search, value levers, product pages" and "Lever generation and review synthesis".
 
 ## 1. Context
 
@@ -254,3 +254,35 @@ Spec extraction from manufacturer pages; licensed-search review synthesis ("What
 11. **Lever value history:** **current value only this sprint** (who/when on the current value); keep superseded values in a later change if audits need them.
 12. **Generation execution:** **in-process after the response, with a 10-minute stale-run timeout**; or a BullMQ job (needs Redis and the reconciler pattern for a rare admin action).
 13. **Backfilled categories:** **kitchen, furniture, home and outdoor become unpublished `Category` rows** and show "Levers for this category are being prepared"; or hide categories without levers from the public list.
+
+## 6. Decisions recorded
+
+### Answers to the open questions (approval of this ADR)
+
+| Q | Decision |
+|---|---|
+| 1 | **As proposed:** approve and publish are one atomic step. |
+| 2 | **Changed:** fold size records folded length, width and height (inches) and one-hand fold (yes/no). The filter uses the folded volume (cu ft) computed from the dimensions, never entered by hand. Implemented as `ValueLever.inputFormat = DIMENSIONS` on a measurement lever in cu ft (below). |
+| 3 | As proposed: seat weight limit (lb), recline and seat height in `detail`. |
+| 4 | As proposed: fictional sample products, every value marked "Sample data". |
+| 5 | **Changed:** the seeded `admin@example.com` is created only when `NODE_ENV` is `development` or `test`; anywhere else `npm run admin:grant -- <email>` is the only path. |
+| 6 | As proposed: 10 live runs per rolling 24 h, all admins together, dry runs not counted. |
+| 7 | **Changed:** no refusal fallback; a refusal fails the run (`error: refusal`). No beta header is sent. |
+| 8 | As proposed: effort `high`. |
+| 9 | As proposed: `csv-parse`. |
+| 10 | **Changed:** `POST /api/products` rejects an unknown category with a 400 listing the valid ones; only admins create categories. |
+| 11 | As proposed: current value only. |
+| 12 | As proposed: in-process after the response, 10-minute stale-run timeout. |
+| 13 | **Changed:** categories without published levers are hidden from browse; a search that matches one shows "being prepared". `GET /api/categories/:slug` is 404 for them. |
+| Extra | A `car-seats` category is seeded, unpublished, with no levers, ready for a live run. Backlog #19 removes `Product.category` once the ML service reads `categoryId`. |
+
+### Changes made during implementation
+
+- **`LeverInputFormat` (`SINGLE` / `DIMENSIONS`) on `ValueLever`** (for Q2). The four lever types are unchanged; a `DIMENSIONS` lever is a measurement whose unit is `cu ft` (CHECK in SQL). `ProductLeverValue` gains `dimLengthIn`, `dimWidthIn`, `dimHeightIn`; `valueNumber` holds the computed volume (rounded to 0.01 cu ft) and `valueBool` the one-hand fold. Sending a volume for a dimensions lever is a 400. An admin can set the input format when editing a measurement lever. The category filter for such a lever takes `min`/`max` (volume) and `is=yes|no` (one-hand fold).
+- **Structured output without the SDK's zod helper.** `zodOutputFormat` needs `zod/v4` schemas and failed to compile under ts-jest ("type instantiation is excessively deep"). The request sends `output_config.format = { type: "json_schema", schema }` with a hand-written structural schema (`CANDIDATE_SET_JSON_SCHEMA` in `levers/client.ts`), and the client parses the first text block as JSON. This is the fallback D9 named; validation is unchanged (the strict zod schema decides).
+- **SDK version:** `@anthropic-ai/sdk` pinned to `1.5.0` (released 2026-11-04; 1.10.0 was a day old). SDK 1.x sends the key as `Authorization: Bearer` and pins `anthropic-version: 2026-10-21`; the request sends no sampling parameters, which that version rejects.
+- **`recordedById` and `approvedById` are nullable with `ON DELETE SET NULL`**, so deleting a user never deletes values or levers. Every API path sets them; the seed leaves them null outside development and test (no admin exists there). The approval time is required on every approved lever (CHECK).
+- **The real client refuses to start under `NODE_ENV=test`** unless a fake is injected, in addition to the dry-run default, so no test can reach the API. The real client class is tested with a stub `fetch` (request body, headers, response parsing).
+- **Category search** matches a query inside a category term ("stroll"), or a category term as whole words inside the query ("strollers for twins"), with hyphens treated as spaces.
+- **`GET /api/products/categories/list`** now lists only categories with published levers (browse rule, Q13); `GET /api/categories` is the replacement.
+- **`AppError` takes optional `details`**, merged into the JSON body next to `error` (per-row CSV errors, `retryAt`, `validCategories`).

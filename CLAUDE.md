@@ -18,7 +18,7 @@ Postgres 16 + pgvector (system of record)      Redis 7 (BullMQ queue only)
 - The browser only talks to the frontend origin. Vite proxies `/api` to the backend (`frontend/vite.config.ts`).
 - The backend calls the ML service over HTTP (`backend/src/services/mlClient.ts`). Every ML response is validated with zod; if `/recommend` fails the route logs a warning and serves a popularity fallback.
 - The ML service reads review data straight from Postgres (it loads `backend/.env` for `DATABASE_URL`). With no `DATABASE_URL` it uses a seeded in-memory demo matrix, which is what the tests use.
-- Data model (`backend/prisma/schema.prisma`): `User` → `ReviewThread` (one per user+product) → `Review` (one per stage; **unique on `(threadId, stage)`**). `ReviewThread.driftScore = latest − initial score` by stage order; `Product.driftScoreAvg` averages its threads. `Nudge` rows schedule the next stage prompt.
+- Data model (`backend/prisma/schema.prisma`): `User` → `ReviewThread` (one per user+product) → `Review` (one per stage; **unique on `(threadId, stage)`**). `ReviewThread.driftScore = latest − initial score` by stage order; `Product.driftScoreAvg` averages its threads. `Nudge` rows schedule the next stage prompt. `Category` → `ValueLever` (five published per category) → `ProductLeverValue`; see "Value levers".
 - Auth: short-lived JWT access token + rotating refresh token stored in `refresh_tokens`. Every token carries a unique `jti`. The frontend persists `{ state, version }` under `localStorage["verdict-auth"]` (Zustand `persist`).
 - `backend/src/app.ts` builds the Express app (no listener); `src/index.ts` listens and starts the worker. Tests import `app`.
 
@@ -38,7 +38,8 @@ Run from the repo root unless noted. Postgres/Redis: `docker compose up -d`.
 | Generate the Prisma client | `cd backend && npx prisma generate` (also runs automatically: backend `predev`/`prebuild`/`pretest`, devcontainer install and start) |
 | Apply migrations | `npm run db:deploy` (= `prisma migrate deploy`) |
 | Create a migration | `cd backend && npx prisma migrate dev --name <name>` in an **interactive** terminal, then commit `prisma/migrations/` |
-| Seed | `npm run db:seed` |
+| Seed | `npm run db:seed` (empty database) · `npm run db:seed:levers` adds categories, the stroller levers and samples to an already-seeded one (idempotent) |
+| Grant or revoke admin | `cd backend && npm run admin:grant -- <email>` / `npm run admin:revoke -- <email>` |
 | Prisma Studio | `npm run db:studio` |
 
 **After pulling** (or switching branches), in this order:
@@ -51,7 +52,7 @@ Run from the repo root unless noted. Postgres/Redis: `docker compose up -d`.
 
 **Prisma commands run inside `backend/`** (`cd backend && npx prisma …`) or through the root `db:*` scripts. Prisma is only installed there; a bare `npx prisma` from the repo root can offer to download a different major version.
 
-Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `carol@…`). API docs: `http://localhost:3001/api/docs`.
+Demo login after seeding: `alice@example.com` / `password123` (also `bob@…`, `carol@…`). Admin (seeded only when `NODE_ENV` is `development` or `test`): `admin@example.com` / `password123`. API docs: `http://localhost:3001/api/docs` (the category and admin routes are in `docs/api.md`).
 
 ## Environment
 
@@ -107,6 +108,21 @@ Design: `docs/adr-email-verification.md` (read it before changing anything here)
   3. `cd backend && npm run email:smoke -- <your Resend account address>`. Success prints `{"ok": true, "provider": "resend", "providerMessageId": "…"}` and the message arrives with subject "[Smoke test] Confirm your email for Verdict". A failure prints `{"ok": false, "error": "Resend API <status>: …", "status": …}`; a 403 about the domain usually means the recipient is not your account address.
   4. Set `NUDGE_EMAIL_PROVIDER` back to `console` (or remove the lines) unless you mean to send real email from that environment.
 
+## Value levers
+
+Categories, the five value levers per category, AI-generated candidates with human approval, and lever values on products (Phase A). Product rules: `docs/product-spec.md`, "Reviews half" and "Lever generation and review synthesis". Design: `docs/adr-levers.md` (read it before changing anything here). Code: `backend/src/levers/`, routes `backend/src/routes/admin.ts` and `categories.ts`, UI `frontend/src/pages/admin/` and `CategoryPage.tsx`.
+
+- **Nothing generated is public unapproved.** Public routes read levers only through `publicLevers()` (`levers/levers.ts`): `APPROVED` levers of a category with `leversPublishedAt` set. Approve and publish are one step: `POST /api/admin/categories/:id/publish` with exactly five ids in order approves them and retires the previous set in one transaction. The database holds the rule too: a deferred constraint trigger refuses any commit leaving a category with an approved count other than 0 or 5, and CHECKs tie `position` to `APPROVED`, `unit` to `MEASUREMENT`, and `sourceUrl` to `sourceType = URL` (`migrate diff` ignores CHECKs and triggers). Categories without published levers are hidden from browse; search still finds them and says they are being prepared.
+- **Admin role:** `users.role` (`USER` / `ADMIN`), read from the database on every `/api/admin/*` request (`middleware/requireAdmin.ts`), never from the JWT. No API grants it: `npm run admin:grant -- <email>` (backend), or the seeded `admin@example.com`, which exists only when the seed runs with `NODE_ENV` `development` or `test`. Login and `/auth/me` return `role` only to show the Admin link.
+- **Generation runs:** `POST /api/admin/categories/:id/runs` answers 202 and the run continues in-process after the response (no Redis). The admin screen polls `GET /api/admin/runs/:id`. A run calls the Anthropic API through the official SDK (`levers/client.ts`, the only place that builds a client) with adaptive thinking, effort `high`, and `output_config.format` = a JSON schema; then the result must pass the strict zod schema (`levers/candidates.ts`: 10 to 12 candidates, unit iff measurement, one-line explanations, unique names). Anything else fails the run with `validation_failed`, `refusal`, `max_tokens`, `api_error:<status>` or `timeout` (still `RUNNING` after 10 minutes), stores no candidates, and still records tokens and cost. No refusal fallback. Candidates whose names already exist in the category are skipped.
+- **Dry run is the default** (`LEVER_GEN_MODE=dry_run`): fixture candidates (`levers/fixtures.ts`, a stroller set for slug `strollers`, a generic set otherwise), stored through the same path with `mode: DRY_RUN` and cost 0. Tests and CI always run without the API: `tests/setupEnv.ts` pins dry run with an empty key, live-mode tests inject a fake with `setLeverClientForTests`, and the real client refuses to start under `NODE_ENV=test`.
+- **Cost controls:** admin-only trigger; `max_tokens = LEVER_GEN_MAX_TOKENS`; at most `LEVER_GEN_DAILY_LIMIT` **live** runs per rolling 24 h across all admins, counted and inserted under a Postgres advisory lock (429 with `retryAt` over the limit; dry runs not counted); tokens and estimated `costUsd` stored on each run and logged (`levers/pricing.ts`; an unpriced model gets a null cost and a warning).
+- **Env vars** (backend, see `.env.example`): `LEVER_GEN_MODE` (`dry_run` default, or `live`), `ANTHROPIC_API_KEY` (live only; startup fails in live mode without it; never commit it), `ANTHROPIC_MODEL` (default `claude-opus-5-5`, in `levers/config.ts`), `LEVER_GEN_MAX_TOKENS` (16000), `LEVER_GEN_DAILY_LIMIT` (10).
+- **Run a generation:** sign in as an admin → Admin → a category (or create one; `car-seats` is seeded unpublished for this) → optional notes → Run generation. In dry run you get fixtures at once. For a real run, set `LEVER_GEN_MODE=live` and `ANTHROPIC_API_KEY` in `backend/.env` (or a Codespaces secret) and restart the API; the admin screen shows the mode and model, and the run table shows status, tokens and cost. Then edit candidates, upload the owner survey CSV (`lever, rank, respondents`; rankings appear beside matching levers), tick and order five, and publish.
+- **Lever values:** one validation function for every write path (`toValueData` in `levers/values.ts`: admin form, CSV import, seed). The source is required with no default: an http(s) URL or "entered by admin"; `recordedById`/`recordedAt` record who and when. Fold size is a `DIMENSIONS` measurement: folded length, width and height (inches) plus one-hand fold are recorded, and the filterable volume (cu ft) is computed, never entered. CSV imports (values and survey) are all or nothing and report row numbers; the value import has a validate-only mode. No URL is ever fetched; there is no scraping.
+- **Products and categories:** `products.categoryId` links to `categories`; `products.category` (the slug string) stays in sync because the ML service reads it (removal is backlog #19). `POST /api/products` rejects an unknown category with a 400 listing the valid ones; only admins create categories.
+- **Seed:** `prisma/seedLevers.ts` (also `npm run db:seed:levers`): categories for existing product strings, `strollers` with the five spec levers published and four fictional sample products whose values are all `isSample` ("Sample data" in the UI), `car-seats` unpublished, and the dev/test admin.
+
 ## Conventions
 
 - **TypeScript is strict. No `any`, `@ts-ignore` or `@ts-expect-error`**; the ESLint config enforces `no-explicit-any`. Validate external data (HTTP bodies, ML responses) with zod and derive types from the schema.
@@ -145,3 +161,4 @@ A change is done when, locally and in CI (`Backend`, `Frontend`, `ML` checks gre
 - Per-IP limits use express-rate-limit's in-memory store, so they are per process; the limits that must hold across instances are database-backed.
 - `npm run dev:ml` calls bare `uvicorn`; it fails if the ML virtualenv isn't active.
 - Jest runs with `forceExit` so a hung request fails the run instead of stalling; open handles haven't been audited.
+- Lever generation: a live run against the real Anthropic API is unverified until it has been run with a real key (the client is tested with a stub `fetch`, and runs with a mocked client). Lever value history is not kept (current value with who/when only).
