@@ -110,12 +110,19 @@ function Generate({ categoryId, runs, onDone }: { categoryId: string; runs: Admi
   useQuery<AdminRun>({
     queryKey: ['admin', 'run', pendingRun],
     queryFn: async () => {
-      const run: AdminRun = (await api.get(`/admin/runs/${pendingRun}`)).data
-      if (run.status !== 'RUNNING') { setPendingRun(null); onDone() }
-      return run
+      try {
+        const run: AdminRun = (await api.get(`/admin/runs/${pendingRun}`)).data
+        if (run.status !== 'RUNNING') { setPendingRun(null); onDone() }
+        return run
+      } catch (err) {
+        setPendingRun(null) // stop polling; the runs table shows the run's state after a refresh
+        onDone()
+        throw err
+      }
     },
     enabled: !!pendingRun,
     refetchInterval: 2000,
+    retry: false,
   })
 
   return (

@@ -43,6 +43,8 @@ function ValueForm({ productId, lever, current }: { productId: string; lever: Pu
 
   const save = useMutation({
     mutationFn: () => {
+      // The source has no default: refuse to send until the admin picks one.
+      if (source === '') return Promise.reject(new Error('Choose a source: a URL or "Entered by admin".'))
       const body: Record<string, unknown> = {
         source: source === 'URL' ? { type: 'URL', url } : { type: 'ADMIN_ENTERED' },
         detail: detail || undefined,
@@ -117,7 +119,7 @@ function ValueForm({ productId, lever, current }: { productId: string; lever: Pu
       </fieldset>
 
       <button className="btn-primary" disabled={save.isPending}>Save value</button>
-      {save.isError && <p role="alert" className="text-sm text-red-700 mt-1">{apiError(save.error)}</p>}
+      {save.isError && <p role="alert" className="text-sm text-red-700 mt-1">{save.error instanceof Error && !('response' in save.error) ? save.error.message : apiError(save.error)}</p>}
       {save.isSuccess && <p className="text-sm text-green-700 mt-1">Saved.</p>}
     </form>
   )

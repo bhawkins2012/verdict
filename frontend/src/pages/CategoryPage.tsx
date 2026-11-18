@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Info } from 'lucide-react'
@@ -7,11 +7,39 @@ import { apiError, filterParams, formatLeverValue, formatNumber, isActive } from
 import { SampleBadge } from '../components/levers/SampleBadge'
 import { CategoryPageData, LeverFilter, PublicLever, FilterOptions } from '../types/levers'
 
+/** Filter state as typed: min and max stay text, so "1." and "1.5" can be entered. */
+type RawFilter = Omit<LeverFilter, 'min' | 'max'> & { min?: string; max?: string }
+
+function numberOrUndefined(s: string | undefined): number | undefined {
+  if (s === undefined || s.trim() === '') return undefined
+  const n = Number(s)
+  return Number.isFinite(n) ? n : undefined
+}
+
+function toApiFilters(raw: Record<string, RawFilter>): Record<string, LeverFilter> {
+  const out: Record<string, LeverFilter> = {}
+  for (const [id, f] of Object.entries(raw)) {
+    const parsed: LeverFilter = { ...f, min: numberOrUndefined(f.min), max: numberOrUndefined(f.max) }
+    if (isActive(parsed)) out[id] = parsed
+  }
+  return out
+}
+
+/** The value, `ms` after it last changed (typing in a min/max box sends one request, not one per key). */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return debounced
+}
+
 export function CategoryPage() {
   const { slug } = useParams<{ slug: string }>()
-  const [filters, setFilters] = useState<Record<string, LeverFilter>>({})
+  const [filters, setFilters] = useState<Record<string, RawFilter>>({})
 
-  const active = Object.fromEntries(Object.entries(filters).filter(([, f]) => isActive(f)))
+  const active = useDebounced(toApiFilters(filters), 300)
   const { data, error, isFetching } = useQuery<CategoryPageData>({
     queryKey: ['category', slug, active],
     queryFn: () => api.get(`/categories/${slug}?${filterParams(active).toString()}`).then((r) => r.data),
@@ -19,7 +47,7 @@ export function CategoryPage() {
     retry: false,
   })
 
-  const setFilter = (id: string, f: LeverFilter) => setFilters((prev) => ({ ...prev, [id]: f }))
+  const setFilter = (id: string, f: RawFilter) => setFilters((prev) => ({ ...prev, [id]: f }))
 
   if (error && !data) {
     return (
@@ -31,7 +59,7 @@ export function CategoryPage() {
   }
   if (!data) return null
 
-  const activeCount = Object.keys(active).length
+  const activeCount = Object.keys(toApiFilters(filters)).length
 
   return (
     <div className="p-8 max-w-5xl mx-auto animate-fade-in">
@@ -81,14 +109,8 @@ export function CategoryPage() {
   )
 }
 
-function numberOrUndefined(s: string): number | undefined {
-  if (s.trim() === '') return undefined
-  const n = Number(s)
-  return Number.isFinite(n) ? n : undefined
-}
-
 function LeverFilterControl({ lever, options, value, onChange }: {
-  lever: PublicLever; options: FilterOptions; value: LeverFilter; onChange: (f: LeverFilter) => void
+  lever: PublicLever; options: FilterOptions; value: RawFilter; onChange: (f: RawFilter) => void
 }) {
   switch (lever.type) {
     case 'MEASUREMENT': {
@@ -99,10 +121,10 @@ function LeverFilterControl({ lever, options, value, onChange }: {
           <div className="flex items-center gap-1">
             <input aria-label={`${lever.name} minimum`} className="input py-1 px-2 text-xs" inputMode="decimal"
               placeholder={range ? `min ${formatNumber(range.min)}` : 'min'} value={value.min ?? ''}
-              onChange={(e) => onChange({ ...value, min: numberOrUndefined(e.target.value) })} />
+              onChange={(e) => onChange({ ...value, min: e.target.value })} />
             <input aria-label={`${lever.name} maximum`} className="input py-1 px-2 text-xs" inputMode="decimal"
               placeholder={range ? `max ${formatNumber(range.max)}` : 'max'} value={value.max ?? ''}
-              onChange={(e) => onChange({ ...value, max: numberOrUndefined(e.target.value) })} />
+              onChange={(e) => onChange({ ...value, max: e.target.value })} />
           </div>
           <p className="text-[11px] text-ink-400">{unitLabel}</p>
           {lever.inputFormat === 'DIMENSIONS' && (
