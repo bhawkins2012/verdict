@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowDown, ArrowLeft, ArrowUp, X } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { api } from '../../lib/api'
 import { apiError, apiRowErrors } from '../../lib/levers'
-import { AdminCategoryDetail, AdminConfig, AdminLever, AdminRun, LeverInputFormat, LeverType } from '../../types/levers'
+import { AdminCategoryDetail, AdminConfig, AdminLever, AdminRun } from '../../types/levers'
+import { LeverForm, TYPE_LABEL } from '../../components/levers/LeverForm'
+import { PublishBoard } from '../../components/levers/PublishBoard'
+import { initialSet } from '../../lib/publishSet'
 import { ConfigNote } from './AdminCategoriesPage'
 
-const TYPE_LABEL: Record<LeverType, string> = {
-  MEASUREMENT: 'Measurement', CATEGORY: 'Category', COMPATIBILITY_LIST: 'Compatibility list', BOOLEAN: 'Yes / no',
-}
 
 export function AdminCategoryPage() {
   const { id = '' } = useParams<{ id: string }>()
@@ -23,23 +23,18 @@ export function AdminCategoryPage() {
   const [edited, setEdited] = useState<string[] | null>(null)
   const publish = useMutation({
     mutationFn: (leverIds: string[]) => api.post(`/admin/categories/${id}/publish`, { leverIds }),
-    onSuccess: () => { setEdited(null); void refresh() },
+    // Refetch first, then drop the local selection: clearing it before the new data arrives would rebuild
+    // the set from stale data (nothing approved yet) and flash every card back to Candidates.
+    onSuccess: async () => { await refresh(); setEdited(null) },
   })
 
   if (!data) return null
-  const selected = edited ?? data.levers.filter((l) => l.status === 'APPROVED').sort((a, b) => (a.position ?? 0) - (b.position ?? 0)).map((l) => l.id)
-  const setSelected = (f: (s: string[]) => string[]) => setEdited(f(selected))
+  const selected = edited ?? initialSet(data.levers)
   const live = data.levers.filter((l) => l.status !== 'RETIRED')
   const retired = data.levers.filter((l) => l.status === 'RETIRED')
-  const byId = new Map(data.levers.map((l) => [l.id, l]))
-
-  const toggle = (leverId: string) =>
-    setSelected((s) => (s.includes(leverId) ? s.filter((x) => x !== leverId) : s.length >= 5 ? s : [...s, leverId]))
-  const move = (i: number, d: -1 | 1) =>
-    setSelected((s) => { const n = [...s]; const j = i + d; if (j < 0 || j >= n.length) return s; [n[i], n[j]] = [n[j], n[i]]; return n })
 
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-in">
+    <div className="p-4 md:p-8 max-w-6xl mx-auto animate-fade-in">
       <Link to="/admin" className="btn-ghost flex items-center gap-2 mb-4 -ml-2 w-fit"><ArrowLeft size={16} /> All categories</Link>
       <h2 className="font-display text-3xl text-ink-900">{data.name} <span className="text-base text-ink-400">/{data.slug}</span></h2>
       <p className="text-sm text-ink-500 mt-1">
@@ -52,38 +47,26 @@ export function AdminCategoryPage() {
       <Generate categoryId={id} runs={data.runs} onDone={() => void refresh()} />
       <Survey categoryId={id} survey={data.survey} onDone={() => void refresh()} />
 
-      {/* Candidates and approved levers */}
-      <section className="mt-8">
-        <h3 className="font-medium text-ink-800 mb-2">Levers ({live.length})</h3>
-        <p className="text-xs text-ink-500 mb-3">Tick five, put them in order, then publish. Publishing approves exactly these five and retires the previous set. Nothing here is public until it is published.</p>
-        <div className="space-y-2">
-          {live.map((l) => (
-            <LeverRow key={l.id} lever={l} selected={selected.includes(l.id)} canSelect={selected.length < 5} onToggle={() => toggle(l.id)} onChanged={() => void refresh()} />
-          ))}
-          {live.length === 0 && <p className="text-sm text-ink-500">No levers yet. Run a generation or add one.</p>}
-        </div>
+      {/* Approval board: candidates and the five-slot publish set */}
+      <section className="mt-8" aria-label="Levers">
+        <h3 className="font-medium text-ink-800 mb-1">Levers ({live.length})</h3>
+        <p className="text-xs text-ink-500 mb-3">
+          Drag five levers into the publish set and put them in order (or use each card's Actions menu), then publish.
+          Publishing approves exactly these five and retires the previous set. Nothing here is public until it is published.
+        </p>
+        <PublishBoard
+          levers={live}
+          set={selected}
+          onSetChange={setEdited}
+          onPublish={(ids) => publish.mutate(ids)}
+          publishing={publish.isPending}
+          renderControls={(lever) => <LeverControls lever={lever} onChanged={() => void refresh()} />}
+          publishStatus={<>
+            {publish.isError && <p role="alert" className="text-sm text-red-700 mt-2">{apiError(publish.error)}</p>}
+            {publish.isSuccess && <p className="text-sm text-green-700 mt-2">Published.</p>}
+          </>}
+        />
         <AddLever categoryId={id} onDone={() => void refresh()} />
-      </section>
-
-      {/* Publish */}
-      <section className="card p-4 mt-6" aria-label="Publish set">
-        <h3 className="font-medium text-ink-800 mb-2">Publish set ({selected.length} / 5)</h3>
-        <ol className="space-y-1">
-          {selected.map((sid, i) => (
-            <li key={sid} className="flex items-center gap-2 text-sm">
-              <span className="w-5 text-ink-400">{i + 1}.</span>
-              <span className="flex-1">{byId.get(sid)?.name}</span>
-              <button aria-label="Move up" className="btn-ghost p-1" onClick={() => move(i, -1)}><ArrowUp size={14} /></button>
-              <button aria-label="Move down" className="btn-ghost p-1" onClick={() => move(i, 1)}><ArrowDown size={14} /></button>
-              <button aria-label="Remove" className="btn-ghost p-1" onClick={() => toggle(sid)}><X size={14} /></button>
-            </li>
-          ))}
-        </ol>
-        <button className="btn-primary mt-3" disabled={selected.length !== 5 || publish.isPending} onClick={() => publish.mutate(selected)}>
-          Approve and publish these five
-        </button>
-        {publish.isError && <p role="alert" className="text-sm text-red-700 mt-2">{apiError(publish.error)}</p>}
-        {publish.isSuccess && <p className="text-sm text-green-700 mt-2">Published.</p>}
       </section>
 
       <ValueImport categoryId={id} products={data.products} published={!!data.leversPublishedAt} />
@@ -193,91 +176,23 @@ function ErrorRows({ message, rows }: { message: string; rows: { row: number; er
   )
 }
 
-// ── Lever row with inline edit ───────────────────────────────────────────────────────────────────────
-function LeverRow({ lever, selected, canSelect, onToggle, onChanged }: {
-  lever: AdminLever; selected: boolean; canSelect: boolean; onToggle: () => void; onChanged: () => void
-}) {
+// ── Edit and Retire on each board card ───────────────────────────────────────────────────────────────
+function LeverControls({ lever, onChanged }: { lever: AdminLever; onChanged: () => void }) {
   const [editing, setEditing] = useState(false)
   const retire = useMutation({ mutationFn: () => api.post(`/admin/levers/${lever.id}/retire`), onSuccess: onChanged })
   return (
-    <div className="card p-3" data-testid={`lever-${lever.name}`}>
-      <div className="flex items-start gap-3">
-        <input type="checkbox" aria-label={`Select ${lever.name}`} className="mt-1" checked={selected} disabled={!selected && !canSelect} onChange={onToggle} />
-        <div className="flex-1">
-          <p className="text-sm">
-            <span className="font-medium text-ink-900">{lever.name}</span>
-            <span className="text-ink-400"> · {TYPE_LABEL[lever.type]}{lever.unit ? ` (${lever.unit})` : ''}{lever.inputFormat === 'DIMENSIONS' ? ', from L × W × H' : ''}</span>
-            {lever.status === 'APPROVED' && <span className="ml-2 text-xs text-green-700">Published #{lever.position}</span>}
-            {lever.survey && <span className="ml-2 text-xs bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded">Survey #{lever.survey.rank} · {lever.survey.respondents} owners</span>}
-          </p>
-          <p className="text-xs text-ink-600">{lever.explanation}</p>
-          <p className="text-[11px] text-ink-400">
-            {lever.origin === 'GENERATED' ? 'Generated' : 'Added by admin'}
-            {lever.relatedNeeds.length > 0 && ` · needs: ${lever.relatedNeeds.join(', ')}`}
-            {lever.allowedValues.length > 0 && ` · values: ${lever.allowedValues.join(', ')}`}
-            {lever.approvedAt && ` · approved by ${lever.approvedBy ?? 'seed'} ${new Date(lever.approvedAt).toLocaleDateString()}`}
-            {lever.editedAt && ` · edited by ${lever.editedBy} ${new Date(lever.editedAt).toLocaleDateString()}`}
-            {lever.valueCount > 0 && ` · ${lever.valueCount} product values`}
-          </p>
-        </div>
-        <button className="btn-ghost text-xs" onClick={() => setEditing((e) => !e)}>{editing ? 'Close' : 'Edit'}</button>
-        {lever.status === 'CANDIDATE' && <button className="btn-ghost text-xs" onClick={() => retire.mutate()}>Retire</button>}
+    <>
+      <div className="flex gap-1 mt-2 pl-8">
+        <button type="button" className="btn-ghost text-xs" aria-expanded={editing} onClick={() => setEditing((e) => !e)}>
+          {editing ? 'Close' : 'Edit'}<span className="sr-only"> {lever.name}</span>
+        </button>
+        {lever.status === 'CANDIDATE' && (
+          <button type="button" className="btn-ghost text-xs" onClick={() => retire.mutate()}>Retire<span className="sr-only"> {lever.name}</span></button>
+        )}
       </div>
       {retire.isError && <p role="alert" className="text-sm text-red-700">{apiError(retire.error)}</p>}
       {editing && <LeverForm initial={lever} onSave={(body) => api.patch(`/admin/levers/${lever.id}`, body)} onDone={() => { setEditing(false); onChanged() }} />}
-    </div>
-  )
-}
-
-interface LeverBody {
-  name: string; type: LeverType; inputFormat: LeverInputFormat; unit: string | null; explanation: string
-  relatedNeeds: string[]; allowedValues: string[]
-}
-
-const splitList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
-
-function LeverForm({ initial, onSave, onDone }: { initial?: Partial<AdminLever>; onSave: (b: LeverBody) => Promise<unknown>; onDone: () => void }) {
-  const [name, setName] = useState(initial?.name ?? '')
-  const [type, setType] = useState<LeverType>(initial?.type ?? 'MEASUREMENT')
-  const [inputFormat, setInputFormat] = useState<LeverInputFormat>(initial?.inputFormat ?? 'SINGLE')
-  const [unit, setUnit] = useState(initial?.unit ?? '')
-  const [explanation, setExplanation] = useState(initial?.explanation ?? '')
-  const [needs, setNeeds] = useState((initial?.relatedNeeds ?? []).join(', '))
-  const [values, setValues] = useState((initial?.allowedValues ?? []).join(', '))
-  const save = useMutation({
-    mutationFn: () => onSave({
-      name, type, inputFormat: type === 'MEASUREMENT' ? inputFormat : 'SINGLE',
-      unit: type === 'MEASUREMENT' ? (inputFormat === 'DIMENSIONS' ? 'cu ft' : unit.trim() || null) : null,
-      explanation, relatedNeeds: splitList(needs), allowedValues: type === 'CATEGORY' ? splitList(values) : [],
-    }),
-    onSuccess: onDone,
-  })
-  return (
-    <form className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-ink-100" onSubmit={(e) => { e.preventDefault(); save.mutate() }}>
-      <label><span className="label">Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} /></label>
-      <label><span className="label">Type</span>
-        <select className="input" value={type} onChange={(e) => setType(e.target.value as LeverType)}>
-          {(Object.keys(TYPE_LABEL) as LeverType[]).map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
-        </select></label>
-      {type === 'MEASUREMENT' && (
-        <>
-          <label><span className="label">Input</span>
-            <select className="input" value={inputFormat} onChange={(e) => setInputFormat(e.target.value as LeverInputFormat)}>
-              <option value="SINGLE">One number</option>
-              <option value="DIMENSIONS">Folded L × W × H in inches (volume in cu ft is computed)</option>
-            </select></label>
-          <label><span className="label">Unit</span>
-            <input className="input" value={inputFormat === 'DIMENSIONS' ? 'cu ft' : unit} disabled={inputFormat === 'DIMENSIONS'} onChange={(e) => setUnit(e.target.value)} required maxLength={20} /></label>
-        </>
-      )}
-      <label className="col-span-2"><span className="label">One-line explanation</span><input className="input" value={explanation} onChange={(e) => setExplanation(e.target.value)} required minLength={10} maxLength={200} /></label>
-      <label><span className="label">Related needs (comma separated)</span><input className="input" value={needs} onChange={(e) => setNeeds(e.target.value)} /></label>
-      {type === 'CATEGORY' && <label><span className="label">Allowed values (comma separated)</span><input className="input" value={values} onChange={(e) => setValues(e.target.value)} /></label>}
-      <div className="col-span-2 flex items-center gap-2">
-        <button className="btn-primary" disabled={save.isPending}>Save</button>
-        {save.isError && <span role="alert" className="text-sm text-red-700">{apiError(save.error)}</span>}
-      </div>
-    </form>
+    </>
   )
 }
 
