@@ -24,3 +24,22 @@ describe('sign out', () => {
     expect(client.getQueryData(['notification-settings'])).toBeUndefined()
   })
 })
+
+describe('phone menu', () => {
+  it('the Menu button opens the sidebar panel; choosing a link closes it', async () => {
+    routes.clear()
+    routes.set('GET /nudges', () => [])
+    view = render(<AppLayout />, { route: '*' }) // stays mounted when a nav link changes the URL
+    await settle()
+    const button = view.container.querySelector<HTMLButtonElement>('button[aria-controls="app-sidebar"]')
+    const aside = view.container.querySelector('#app-sidebar')
+    expect(button?.getAttribute('aria-expanded')).toBe('false')
+    expect(aside?.className).toContain('invisible') // closed: hidden on phones and out of the tab order
+    await click(button)
+    expect(button?.getAttribute('aria-expanded')).toBe('true')
+    expect(aside?.className).toContain('visible')
+    expect(aside?.className).not.toMatch(/(^| )invisible/)
+    await click(aside?.querySelector('a[href="/discover"]') ?? null)
+    expect(button?.getAttribute('aria-expanded')).toBe('false')
+  })
+})
