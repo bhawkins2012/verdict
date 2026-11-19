@@ -1,3 +1,4 @@
+import { act } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppLayout } from './AppLayout'
 import { routes } from '../../test/apiMock'
@@ -26,20 +27,39 @@ describe('sign out', () => {
 })
 
 describe('phone menu', () => {
-  it('the Menu button opens the sidebar panel; choosing a link closes it', async () => {
+  const setup = async () => {
     routes.clear()
     routes.set('GET /nudges', () => [])
     view = render(<AppLayout />, { route: '*' }) // stays mounted when a nav link changes the URL
     await settle()
     const button = view.container.querySelector<HTMLButtonElement>('button[aria-controls="app-sidebar"]')
     const aside = view.container.querySelector('#app-sidebar')
+    const main = view.container.querySelector('main')
+    return { button, aside, main }
+  }
+
+  it('opening moves focus into the panel and makes the page behind inert; choosing a link closes it', async () => {
+    const { button, aside, main } = await setup()
+    expect(button?.getAttribute('aria-label')).toBe('Menu')
     expect(button?.getAttribute('aria-expanded')).toBe('false')
-    expect(aside?.className).toContain('invisible') // closed: hidden on phones and out of the tab order
+    expect(aside?.className).toMatch(/(^| )invisible( |$)/) // closed: hidden on phones and out of the tab order
     await click(button)
     expect(button?.getAttribute('aria-expanded')).toBe('true')
-    expect(aside?.className).toContain('visible')
-    expect(aside?.className).not.toMatch(/(^| )invisible/)
+    expect(aside?.className).not.toMatch(/(^| )invisible( |$)/)
+    expect(aside?.contains(document.activeElement)).toBe(true)
+    expect(main?.hasAttribute('inert')).toBe(true)
     await click(aside?.querySelector('a[href="/discover"]') ?? null)
     expect(button?.getAttribute('aria-expanded')).toBe('false')
+    expect(main?.hasAttribute('inert')).toBe(false)
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('Escape closes it from anywhere and returns focus to the Menu button', async () => {
+    const { button, main } = await setup()
+    await click(button)
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(button?.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(button)
+    expect(main?.hasAttribute('inert')).toBe(false)
   })
 })
