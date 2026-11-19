@@ -22,6 +22,15 @@ export function initialSet(levers: readonly LeverLike[]): string[] {
     .map((l) => l.id)
 }
 
+/**
+ * Keep only ids of levers that are still live (not retired, still present). A lever retired or removed
+ * while it sat in an unsaved set would otherwise leave a slot that counts towards five but shows nothing.
+ */
+export function pruneSet(set: readonly string[], levers: readonly LeverLike[]): string[] {
+  const live = new Set(levers.filter((l) => l.status !== 'RETIRED').map((l) => l.id))
+  return set.filter((id) => live.has(id))
+}
+
 /** Non-retired levers that are not in the set, in their original order. */
 export function candidatesOf<T extends LeverLike>(levers: readonly T[], set: readonly string[]): T[] {
   return levers.filter((l) => l.status !== 'RETIRED' && !set.includes(l.id))

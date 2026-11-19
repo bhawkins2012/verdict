@@ -1,6 +1,6 @@
 import { act, useState } from 'react'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { PublishBoard } from './PublishBoard'
+import { createBoardCollision, DragTracking, pointerCollision, PublishBoard } from './PublishBoard'
 import { render, Rendered, settle } from '../../test/render'
 import { AdminLever } from '../../types/levers'
 
@@ -12,9 +12,9 @@ const lever = (id: string, name: string, status: AdminLever['status'] = 'CANDIDA
 })
 const LEVERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((n) => lever(n.toLowerCase(), `Lever ${n}`))
 
-function Harness({ initial, onPublish }: { initial: string[]; onPublish: (ids: string[]) => void }) {
+function Harness({ initial, onPublish, locked }: { initial: string[]; onPublish: (ids: string[]) => void; locked?: string[] }) {
   const [set, setSet] = useState(initial)
-  return <PublishBoard levers={LEVERS} set={set} onSetChange={setSet} onPublish={onPublish} renderControls={() => null} />
+  return <PublishBoard levers={LEVERS} set={set} onSetChange={setSet} onPublish={onPublish} renderControls={() => null} lockedIds={locked ? new Set(locked) : undefined} />
 }
 
 // ── Layout for dnd-kit under jsdom ───────────────────────────────────────────────────────────────────
@@ -184,5 +184,160 @@ describe('publish board: keyboard drag of a sixth candidate', () => {
     expect(slotNames()).toEqual(['Lever A', 'Lever B', 'Lever C', 'Lever D', 'Lever E'])
     expect(q('[data-testid="full-notice"]').textContent).toMatch(/already has five levers/)
     expect(liveText()).toMatch(/already has five levers/)
+  })
+})
+
+describe('publish board: focus after menu and Remove actions (keyboard users keep their place)', () => {
+  const actionsButton = (name: string) => q<HTMLButtonElement>(`button[aria-label="Actions for ${name}"]`)
+  async function menuItem(name: string, label: string) {
+    await act(async () => actionsButton(name).click()) // focus is wherever the last action left it
+    await settle(1)
+    const item = [...view!.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.startsWith(label))
+    if (!item) throw new Error(`no ${label}`)
+    await act(async () => item.click())
+    await settle(1)
+  }
+
+  it('after Add to set, Move down, Remove from set and the X button, focus is on the moved card\'s Actions button', async () => {
+    view = render(<Harness initial={['a', 'b']} onPublish={vi.fn()} />)
+    await settle()
+    await menuItem('Lever C', 'Add to set') // candidates → set
+    expect(document.activeElement).toBe(actionsButton('Lever C'))
+    expect(q('ol[aria-label="Publish set slots"]').contains(document.activeElement)).toBe(true)
+
+    await menuItem('Lever A', 'Move down') // the focused card is the one that moves later in the list
+    expect(slotNames()).toEqual(['Lever B', 'Lever A', 'Lever C'])
+    expect(document.activeElement).toBe(actionsButton('Lever A'))
+
+    await menuItem('Lever B', 'Remove from set') // set → candidates
+    expect(document.activeElement).toBe(actionsButton('Lever B'))
+    expect(q('ul[aria-label="Candidate levers"]').contains(document.activeElement)).toBe(true)
+
+    await act(async () => q<HTMLButtonElement>('button[aria-label="Remove Lever C from the publish set"]').click())
+    await settle(1)
+    expect(document.activeElement).toBe(actionsButton('Lever C'))
+    expect(candidateNames()).toContain('Lever C')
+  })
+
+  it('a full set: focus still enters the menu, on the disabled item, so its reason can be read', async () => {
+    view = render(<Harness initial={['a', 'b', 'c', 'd', 'e']} onPublish={vi.fn()} />)
+    await settle()
+    await act(async () => actionsButton('Lever F').click())
+    await settle(1)
+    expect(document.activeElement?.getAttribute('role')).toBe('menuitem')
+    expect(document.activeElement?.getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement?.textContent).toMatch(/remove one first/)
+  })
+})
+
+describe('publish board: more keyboard drags', () => {
+  it('a candidate dragged into a set that is not full is added (ArrowRight towards the set, Space)', async () => {
+    view = render(<Harness initial={['a', 'b']} onPublish={vi.fn()} />)
+    await settle()
+    q<HTMLButtonElement>('[data-testid="handle-Lever C"]').focus()
+    await press('Space')
+    await press('ArrowRight')
+    await press('Space')
+    await settle()
+    expect(slotNames()).toContain('Lever C')
+    expect(slotNames()).toHaveLength(3)
+    expect(candidateNames()).not.toContain('Lever C')
+    expect(liveText()).toMatch(/Lever C added to the publish set at position \d of 5/)
+  })
+
+  it('a set card dragged out (ArrowLeft towards Candidates, Space) returns to Candidates', async () => {
+    view = render(<Harness initial={['a', 'b', 'c']} onPublish={vi.fn()} />)
+    await settle()
+    q<HTMLButtonElement>('[data-testid="handle-Lever B"]').focus()
+    await press('Space')
+    await press('ArrowLeft')
+    await press('Space')
+    await settle()
+    expect(slotNames()).toEqual(['Lever A', 'Lever C'])
+    expect(candidateNames()).toContain('Lever B')
+    expect(liveText()).toMatch(/Lever B returned to Candidates/)
+  })
+})
+
+describe('publish board: a card whose edit form is open stays put', () => {
+  it('its moves are disabled with the reason, it has no Remove button, and its handle is marked disabled', async () => {
+    view = render(<Harness initial={['a', 'b']} onPublish={vi.fn()} locked={['a', 'c']} />)
+    await settle()
+    expect(view.container.querySelector('button[aria-label="Remove Lever A from the publish set"]')).toBeNull()
+    expect(q('[data-testid="handle-Lever A"]').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => q<HTMLButtonElement>('button[aria-label="Actions for Lever C"]').click())
+    await settle(1)
+    const add = [...view.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.startsWith('Add to set'))
+    expect(add?.getAttribute('aria-disabled')).toBe('true')
+    expect(add?.textContent).toMatch(/close its edit form first/)
+    await act(async () => add?.click())
+    expect(slotNames()).toEqual(['Lever A', 'Lever B'])
+    // A keyboard pick-up does nothing either.
+    q<HTMLButtonElement>('[data-testid="handle-Lever A"]').focus()
+    await press('Space')
+    await press('ArrowDown')
+    await press('Space')
+    await settle()
+    expect(slotNames()).toEqual(['Lever A', 'Lever B'])
+  })
+})
+
+describe('drop targets for mouse and touch', () => {
+  type Args = Parameters<typeof pointerCollision>[0]
+  const rect = (top: number, left = 400, height = 50, width = 280) => ({ top, left, width, height, right: left + width, bottom: top + height })
+  const container = (id: string, zone?: string) => ({ id, key: id, data: { current: zone ? { zone } : {} }, disabled: false, node: { current: null }, rect: { current: null } })
+  const args = (pointer: { x: number; y: number } | null): Args => {
+    const containers = [container('set'), container('candidates'), container('a', 'set'), container('b', 'set'), container('x', 'candidates')]
+    const rects = new Map([
+      ['set', rect(0, 400, 600, 300)], ['candidates', rect(0, 0, 600, 300)],
+      ['a', rect(40)], ['b', rect(100)], ['x', rect(40, 10)],
+    ])
+    return {
+      active: { id: 'x', data: { current: {} }, rect: { current: { initial: null, translated: null } } },
+      collisionRect: rect(40, 10),
+      droppableRects: rects,
+      droppableContainers: containers,
+      pointerCoordinates: pointer,
+    } as unknown as Args
+  }
+  const at = (x: number, y: number) => pointerCollision(args({ x, y }), { x, y }).map((c) => c.id)
+
+  it('a card under the pointer wins over its zone', () => {
+    expect(at(500, 60)).toEqual(['a'])
+  })
+  it('in the gap between two set cards, the nearest card wins (not the last slot)', () => {
+    // Card a spans 40-90 (centre 65), card b spans 100-150 (centre 125); the gap is 90-100.
+    expect(at(500, 93)).toEqual(['a'])
+    expect(at(500, 97)).toEqual(['b'])
+  })
+  it('below the last set card (the empty slots), the set zone itself: the card is appended', () => {
+    expect(at(500, 400)).toEqual(['set'])
+  })
+  it('outside both zones there is no target, so the drop changes nothing', () => {
+    expect(at(350, 300)).toEqual([])
+    expect(at(900, 300)).toEqual([])
+  })
+  it('uses a target\'s live position when it has a node (dnd-kit\'s stored one goes stale when <main> scrolls)', () => {
+    const a = args({ x: 500, y: 330 })
+    const node = document.createElement('div')
+    node.getBoundingClientRect = () => ({ ...rect(310), x: 400, y: 310, toJSON: () => ({}) }) as DOMRect
+    const live = a.droppableContainers.map((c) => (c.id === 'b' ? { ...c, node: { current: node } } : c))
+    expect(pointerCollision({ ...a, droppableContainers: live }, { x: 500, y: 330 }).map((c) => c.id)).toEqual(['b'])
+  })
+
+  it('a touch drop (no coordinates on touchend) lands where the pointer last was, not on the nearest droppable', () => {
+    const tracking = new DragTracking()
+    tracking.start()
+    const detect = createBoardCollision(tracking)
+    expect(detect(args({ x: 500, y: 400 })).map((c) => c.id)).toEqual(['set']) // touchmove over the empty slots
+    expect(detect(args(null)).map((c) => c.id)).toEqual(['set']) // touchend: same target
+  })
+  it('a keyboard drag uses the nearest droppable (there is no pointer), even after an earlier mouse drag', () => {
+    const tracking = new DragTracking()
+    const detect = createBoardCollision(tracking)
+    tracking.start()
+    detect(args({ x: 350, y: 300 })) // an earlier mouse drag ended outside both zones
+    tracking.start() // the keyboard drag starts
+    expect(detect(args(null)).length).toBeGreaterThan(0)
   })
 })

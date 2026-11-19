@@ -7,7 +7,7 @@ import { apiError, apiRowErrors } from '../../lib/levers'
 import { AdminCategoryDetail, AdminConfig, AdminLever, AdminRun } from '../../types/levers'
 import { LeverForm, TYPE_LABEL } from '../../components/levers/LeverForm'
 import { PublishBoard } from '../../components/levers/PublishBoard'
-import { initialSet } from '../../lib/publishSet'
+import { initialSet, pruneSet } from '../../lib/publishSet'
 import { ConfigNote } from './AdminCategoriesPage'
 
 
@@ -21,6 +21,9 @@ export function AdminCategoryPage() {
 
   // The publish set: the published levers in order, until the admin changes the selection.
   const [edited, setEdited] = useState<string[] | null>(null)
+  // The lever whose Edit form is open: kept here (not in the card) and locked in place on the board, so
+  // moving it between zones cannot remount the form and drop what the admin typed.
+  const [editingId, setEditingId] = useState<string | null>(null)
   const publish = useMutation({
     mutationFn: (leverIds: string[]) => api.post(`/admin/categories/${id}/publish`, { leverIds }),
     // Refetch first, then drop the local selection: clearing it before the new data arrives would rebuild
@@ -29,7 +32,8 @@ export function AdminCategoryPage() {
   })
 
   if (!data) return null
-  const selected = edited ?? initialSet(data.levers)
+  // Pruned against the live levers: a lever retired while it sat in the unsaved set must not keep a slot.
+  const selected = pruneSet(edited ?? initialSet(data.levers), data.levers)
   const live = data.levers.filter((l) => l.status !== 'RETIRED')
   const retired = data.levers.filter((l) => l.status === 'RETIRED')
 
@@ -60,7 +64,15 @@ export function AdminCategoryPage() {
           onSetChange={setEdited}
           onPublish={(ids) => publish.mutate(ids)}
           publishing={publish.isPending}
-          renderControls={(lever) => <LeverControls lever={lever} onChanged={() => void refresh()} />}
+          lockedIds={editingId ? new Set([editingId]) : undefined}
+          renderControls={(lever) => (
+            <LeverControls
+              lever={lever}
+              editing={editingId === lever.id}
+              onToggleEdit={() => setEditingId((cur) => (cur === lever.id ? null : lever.id))}
+              onChanged={() => { setEditingId(null); void refresh() }}
+            />
+          )}
           publishStatus={<>
             {publish.isError && <p role="alert" className="text-sm text-red-700 mt-2">{apiError(publish.error)}</p>}
             {publish.isSuccess && <p className="text-sm text-green-700 mt-2">Published.</p>}
@@ -177,13 +189,14 @@ function ErrorRows({ message, rows }: { message: string; rows: { row: number; er
 }
 
 // ── Edit and Retire on each board card ───────────────────────────────────────────────────────────────
-function LeverControls({ lever, onChanged }: { lever: AdminLever; onChanged: () => void }) {
-  const [editing, setEditing] = useState(false)
+function LeverControls({ lever, editing, onToggleEdit, onChanged }: {
+  lever: AdminLever; editing: boolean; onToggleEdit: () => void; onChanged: () => void
+}) {
   const retire = useMutation({ mutationFn: () => api.post(`/admin/levers/${lever.id}/retire`), onSuccess: onChanged })
   return (
     <>
       <div className="flex gap-1 mt-2 pl-8">
-        <button type="button" className="btn-ghost text-xs" aria-expanded={editing} onClick={() => setEditing((e) => !e)}>
+        <button type="button" className="btn-ghost text-xs" aria-expanded={editing} onClick={onToggleEdit}>
           {editing ? 'Close' : 'Edit'}<span className="sr-only"> {lever.name}</span>
         </button>
         {lever.status === 'CANDIDATE' && (
@@ -191,7 +204,7 @@ function LeverControls({ lever, onChanged }: { lever: AdminLever; onChanged: () 
         )}
       </div>
       {retire.isError && <p role="alert" className="text-sm text-red-700">{apiError(retire.error)}</p>}
-      {editing && <LeverForm initial={lever} onSave={(body) => api.patch(`/admin/levers/${lever.id}`, body)} onDone={() => { setEditing(false); onChanged() }} />}
+      {editing && <LeverForm initial={lever} onSave={(body) => api.patch(`/admin/levers/${lever.id}`, body)} onDone={onChanged} />}
     </>
   )
 }

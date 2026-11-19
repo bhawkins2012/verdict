@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addToSet, applyDrop, candidatesOf, initialSet, isComplete, moveBy, moveWithin, planDrop, publishPayload, removeFromSet, SET_SIZE,
+  pruneSet, addToSet, applyDrop, candidatesOf, initialSet, isComplete, moveBy, moveWithin, planDrop, publishPayload, removeFromSet, SET_SIZE,
 } from './publishSet'
 
 const lever = (id: string, status: 'CANDIDATE' | 'APPROVED' | 'RETIRED' = 'CANDIDATE', position: number | null = null) => ({ id, status, position })
@@ -15,6 +15,14 @@ describe('initial set and candidates', () => {
     const levers = [lever('a'), lever('r', 'RETIRED'), lever('b', 'APPROVED', 1), lever('c')]
     expect(candidatesOf(levers, ['b']).map((l) => l.id)).toEqual(['a', 'c'])
     expect(candidatesOf(levers, ['a', 'c']).map((l) => l.id)).toEqual(['b'])
+  })
+})
+
+describe('prune', () => {
+  it('drops levers that were retired or no longer exist, keeping the order of the rest', () => {
+    const levers = [lever('a'), lever('b', 'RETIRED'), lever('c', 'APPROVED', 1)]
+    expect(pruneSet(['c', 'b', 'gone', 'a'], levers)).toEqual(['c', 'a'])
+    expect(pruneSet([], levers)).toEqual([])
   })
 })
 
