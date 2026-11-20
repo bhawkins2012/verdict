@@ -45,10 +45,15 @@ export function AdminReviewPage() {
   const set = pruneSet(edited ?? initialSet(data.levers), data.levers)
   const chosen = set.map((sid) => live.find((l) => l.id === sid)).filter((l): l is BoardLever => !!l)
   const p = data.progress.products
+  // Value progress over what the grid shows: the chosen levers × approved products.
+  const approvedIds = new Set(data.products.filter((x) => x.status === 'APPROVED').map((x) => x.id))
+  const chosenDefs = new Set(chosen.map((l) => l.definitionId))
+  const inGrid = data.values.filter((v) => approvedIds.has(v.productId) && chosenDefs.has(v.definitionId))
+  const reviewed = inGrid.filter((v) => v.status !== 'PROPOSED').length
   const steps: { id: Step; label: string; detail: string }[] = [
     { id: 'products', label: 'Products', detail: `${p.APPROVED} approved · ${p.NEEDS_ATTENTION} need attention` },
     { id: 'levers', label: 'Levers', detail: `${set.length} of 5 chosen · ${live.length} candidates` },
-    { id: 'values', label: 'Values', detail: `${data.progress.values.reviewed} of ${data.progress.values.total} reviewed` },
+    { id: 'values', label: 'Values', detail: chosen.length ? `${reviewed} of ${inGrid.length} reviewed (chosen levers)` : 'choose the levers first' },
   ]
   const publishStatus = <>
     {publish.isError && <p role="alert" className="text-sm text-red-700 mt-2">{apiError(publish.error)}</p>}
@@ -68,15 +73,15 @@ export function AdminReviewPage() {
       {data.run?.warning && <p className="text-sm text-amber-800 mt-1">{data.run.warning}</p>}
       <p className="sr-only" aria-live="polite">{announce}</p>
 
-      <div className="grid grid-cols-[220px_1fr] gap-6 mt-6">
-        <nav aria-label="Review steps">
-          <ol className="space-y-1">
+      <div className="mt-6">
+        <nav aria-label="Review steps" className="flex flex-wrap items-start gap-4 mb-6">
+          <ol className="flex gap-2">
             {steps.map((s, i) => (
               <li key={s.id}>
                 <button
                   type="button"
                   aria-current={step === s.id ? 'step' : undefined}
-                  className={clsx('w-full text-left rounded-lg px-3 py-2', step === s.id ? 'bg-ink-900 text-white' : 'hover:bg-ink-100')}
+                  className={clsx('text-left rounded-lg px-3 py-2 min-w-[200px]', step === s.id ? 'bg-ink-900 text-white' : 'bg-white border border-ink-200 hover:bg-ink-100')}
                   onClick={() => setStep(s.id)}
                 >
                   <span className="text-sm font-medium">{i + 1}. {s.label}</span>
@@ -126,11 +131,11 @@ export function AdminReviewPage() {
 function Gate({ data, chosen }: { data: ReviewData; chosen: BoardLever[] }) {
   const products = data.progress.products.APPROVED
   return (
-    <div className="card p-3 mt-4 text-xs" aria-label="Publish gate">
+    <div className="card p-3 text-xs flex-1 min-w-[280px]" aria-label="Publish gate">
       <p className="font-medium text-ink-800 mb-1">Publish gate</p>
       <p className={clsx(products >= data.config.minProducts ? 'text-green-800' : 'text-amber-800')}>{products} approved products (at least {data.config.minProducts})</p>
       {chosen.length < 5 && <p className="text-amber-800">{chosen.length} of 5 levers chosen</p>}
-      <ul className="mt-1 space-y-0.5">
+      <ul className="mt-1 grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-0.5">
         {chosen.map((l) => {
           const ok = products > 0 && l.coverage.accepted * 5 >= products * 4
           return <li key={l.id} className={ok ? 'text-green-800' : 'text-amber-800'}>{l.name}: {l.coverage.accepted} of {products} accepted {ok ? '✓' : `(needs ${Math.ceil(products * 0.8)})`}</li>
@@ -363,7 +368,7 @@ function ValuesStep({ data, chosen, onChange, announce, onPublish, publishing, p
         </p>
       )}
 
-      <div className="grid grid-cols-[1fr_360px] gap-4">
+      <div className="grid grid-cols-[1fr_340px] gap-4">
         <div className="overflow-x-auto">
           <table ref={gridRef} role="grid" aria-label="Values: products by lever" className="w-full text-xs border-separate border-spacing-0" onKeyDown={onKey}>
             <thead>
@@ -372,7 +377,7 @@ function ValuesStep({ data, chosen, onChange, announce, onPublish, publishing, p
                 {chosen.map((l) => {
                   const ok = l.coverage.products > 0 && l.coverage.accepted * 5 >= l.coverage.products * 4
                   return (
-                    <th key={l.id} role="columnheader" className="text-left p-2 align-bottom min-w-[150px]">
+                    <th key={l.id} role="columnheader" className="text-left p-2 align-bottom min-w-[110px]">
                       <span className="block text-ink-900">{l.name}</span>
                       <span className={clsx('block font-normal', ok ? 'text-green-800' : 'text-amber-800')}>{l.coverage.accepted} / {l.coverage.products} accepted{ok ? ' ✓' : ''}</span>
                       {l.safety

@@ -88,6 +88,9 @@ export async function search(q: string) {
     // "stroll" finds Strollers; "strollers for twins" finds Strollers too, but only on whole words.
     return k.includes(needle) || ks.includes(singular) || ` ${needle} `.includes(` ${k} `) || ` ${singular} `.includes(` ${ks} `)
   }))
+  // Public nodes first, then names that start with the query, then the rest by name.
+  const rank = (n: { id: string; name: string }) => (t.visible(n.id) ? 0 : 2) + (searchKey(n.name).startsWith(needle) || searchKey(n.name).startsWith(singular) ? 0 : 1)
+  hits.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   const nodes = hits.slice(0, 10).map((n) => {
     const row = t.byId.get(n.id)
     const visible = t.visible(n.id)
