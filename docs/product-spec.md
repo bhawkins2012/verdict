@@ -117,10 +117,11 @@ Levers cannot be judged without data: a lever manufacturers rarely publish is we
 
 1. **Place the node.** Confirm its primary parent and any secondary parents in the taxonomy.
 2. **Generate candidate levers.** 10 to 12 candidates, reusing shared lever definitions where they exist, each with a type, units, explanation, related needs and a safety flag where relevant.
-3. **Discover products.** 15 to 20 widely sold products, each with its manufacturer product-page URL.
-4. **Extract values.** For every candidate lever and product, the value from the manufacturer page with a short evidence quote and the source URL, or unknown. One page fetch per product covers all candidate levers.
-5. **Validate with owners (optional).** A paid-panel survey of owners with 6 or more months of use ranks the candidates; results are imported as a CSV and become a Verdict-owned asset.
-6. **Review and publish.** One review screen: approve or reject products; drag five lever cards into order, each showing its data coverage (for example 18 of 20 products); accept, edit or reject the values for the chosen five. Publishing is atomic: the node, its five levers, the accepted products and their values go live together.
+3. **Discover products.** 15 to 20 widely sold products (at least 10 for niche nodes), each with its manufacturer product-page URL.
+4. **Verify and auto-approve.** Each brand's official domain is verified once: automatically when it is HTTPS, not a retailer or review site, contains the brand name and its homepage identifies the brand; otherwise by a one-time admin confirmation. A product is approved automatically when its page is on its brand's verified domain, fetches successfully, names the model, is confirmed to belong in the node and is not a duplicate. Products that fail a check go to a needs-attention list without stopping the run.
+5. **Extract values.** For every candidate lever and approved product, the value from the manufacturer page or a text-based PDF manual on the brand's verified domain, with a short evidence quote and the source URL, or unknown. One page fetch per product covers all candidate levers.
+6. **Validate with owners (optional).** A paid-panel survey of owners with 6 or more months of use ranks the candidates; results are imported as a CSV and become a Verdict-owned asset.
+7. **Review and publish.** One review screen: remove any auto-approved product that should not be listed; drag five lever cards into order, each showing its data coverage (for example 18 of 20 products); accept, edit or reject the values for the chosen five. Publishing is atomic: the node, its five levers, the listed products and their values go live together. Value review is the one human step, by design.
 
 **Publish gate**
 
@@ -137,8 +138,9 @@ Levers cannot be judged without data: a lever manufacturers rarely publish is we
 **Data sourcing rules**
 
 - No automated collection from third-party sites whose terms prohibit it (for example Amazon and Yelp), no logins, and no circumvention of blocks, CAPTCHAs or rate limits. robots.txt is respected.
-- Product values come only from an allow-list of manufacturer domains and official manuals. Retailers and review sites are excluded.
+- Product values come only from verified brand domains (the allow-list) and text-based PDF manuals hosted there. Retailers and review sites are excluded.
 - Every extracted value carries an evidence quote that appears verbatim on its source page. A value not stated there is recorded as unknown, never inferred.
+- An admin may enter a missing value with its source URL and a pasted quote. The quote is checked against a fresh fetch where possible; if the site blocks fetching, the value is labelled admin-attested.
 - Manufacturer images are not stored or shown.
 - Licensed review data is used only when the license grants Verdict's specific commercial use; a vendor's own collection method is checked during diligence.
 - Brand-supplied specs may fill lever values, labelled with their source. Brand-supplied review content is never used in the reviews half.
@@ -148,6 +150,7 @@ Levers cannot be judged without data: a lever manufacturers rarely publish is we
 **Acceptance criteria**
 
 - [ ] A run for a new decision node produces candidate levers, 15 to 20 candidate products and their extracted values with no manual data entry.
+- [ ] Products pass automated checks (verified brand domain, successful fetch, model named, node fit, no duplicate) or land in a needs-attention list; no manual product approval is required.
 - [ ] Every published lever has an explanation and an approval record (who, when).
 - [ ] Every published value has a source link and an evidence quote, or is marked unknown.
 - [ ] Publishing is refused when any of the five levers is below 80% value coverage.
@@ -256,7 +259,8 @@ The advertisements half is the revenue engine: a digital museum of advertising, 
 | LeverDefinition | Shared name, type, units, explanation, safety flag | Decision nodes that use it |
 | NodeLever | A decision node's five published levers, in order | TaxonomyNode, LeverDefinition |
 | GenerationRun | Candidate levers, products and values for one node; cost; status | TaxonomyNode |
-| ProductLeverValue | Value, status (proposed, accepted, rejected), evidence quote, source URL | Product, LeverDefinition |
+| BrandDomain | Brand, verified manufacturer host, how it was verified (automatic or admin) | Products |
+| ProductLeverValue | Value, status (proposed, accepted, rejected), evidence quote, source URL, admin-attested flag | Product, LeverDefinition |
 | ProjectTemplate | Milestones, steps, dependencies between items | One or more decision nodes |
 | UserProject | Answers, progress, chosen products, purchase dates | User, ProjectTemplate, ReviewThread |
 | ReviewLeverRating | A rating for one lever at one review stage | Review, LeverDefinition |
