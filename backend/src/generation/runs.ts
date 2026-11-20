@@ -16,7 +16,7 @@ import { loadTaxonomy } from '../catalog/taxonomy'
 import { EMPTY_VALUE } from '../catalog/values'
 import { isVerifiedFor, verifyBrandHost } from './brands'
 import { GenerationConfig, loadGenerationConfig } from './config'
-import { CapError, estimateNodeUsd, reserveCall, settleCall, worstCaseUsd } from './costs'
+import { CapError, estimateNodeUsd, reserveCall, settleCall, worstCaseResumedUsd } from './costs'
 import { checkEvidence, EvidenceDocument } from './evidence'
 import { Fetcher, fetcherFor } from './fetch/fetcher'
 import { httpsHostKey, isDenylisted } from './fetch/hosts'
@@ -24,7 +24,7 @@ import { excerpt, looksLikeChallenge, parseHtml } from './fetch/html'
 import { extractPdfText } from './fetch/pdf'
 import { DryRunModel } from './fixtures/dryRunModel'
 import { fixtureTransport } from './fixtures/site'
-import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, ExtractDocument, ExtractLever, GenerationModel, liveModel, ModelResult, overrideModel } from './model'
+import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, PartialUsageError, ExtractDocument, ExtractLever, GenerationModel, liveModel, ModelResult, overrideModel } from './model'
 import { notifyRunReady } from './notify'
 import {
   describeIssues, DiscoverySchema, ExplainerSchema, ExtractedValue, ExtractionSchema, LeverSetSchema, MIN_PRODUCTS, PlacementSchema,
@@ -103,22 +103,30 @@ async function contextFor(runId: string): Promise<RunContext> {
 }
 
 /** One model call: reserved against the caps first (live), settled after, refusals and truncation fail the stage. */
+const NO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, webSearches: 0 }
+
 async function callModel(ctx: RunContext, stage: RunStage, productId: string | null, promptChars: number, maxSearches: number,
   call: () => Promise<ModelResult>, requests = 1): Promise<ModelResult> {
   const live = ctx.mode === LeverRunMode.LIVE
-  // One call may be several API requests (discovery resumes pause_turn): reserve the worst case of each.
-  const one = live ? worstCaseUsd(ctx.config.model, promptChars, ctx.config.maxTokens, maxSearches, maxSearches * 10_000) : 0
-  const reserved = one === null ? null : one * requests
+  // One call may be several API requests (discovery resumes pause_turn), each resending the conversation so
+  // far: reserve the worst case of all of them, with the growing input.
+  const reserved = live ? worstCaseResumedUsd(ctx.config.model, promptChars, ctx.config.maxTokens, maxSearches, requests) : 0
   const callId = await (live
     ? reserveCall({ runId: ctx.runId, stage, productId, model: ctx.config.model, reservedUsd: reserved, runCapUsd: ctx.config.runCapUsd, dailyCapUsd: ctx.config.dailyCapUsd })
     : prisma.generationCall.create({ data: { runId: ctx.runId, stage, productId, model: 'dry-run', reservedUsd: 0 }, select: { id: true } }).then((c) => c.id))
   let result: ModelResult
   try {
     result = await call()
-  } catch (err) {
+  } catch (caught) {
+    const err = caught instanceof PartialUsageError ? caught.inner : caught
     // Typed SDK errors: record the status only, never the message body (it can echo request content).
     const code = err instanceof Anthropic.APIError ? `api_error:${err.status ?? 'connection'}` : 'api_error:unknown'
-    await settleCall(callId, ctx.config.model, null, null, code)
+    // An error status means the API answered and did not bill that request: the call costs what its earlier
+    // requests used (0 for a single request). A timeout, a dropped connection or anything else may have been
+    // billed, so the cost stays unknown and the reservation keeps counting against the caps.
+    const answered = err instanceof Anthropic.APIError && typeof err.status === 'number'
+    const usage = answered ? (caught instanceof PartialUsageError ? caught.usage : NO_USAGE) : null
+    await settleCall(callId, ctx.config.model, null, live ? usage : null, code)
     throw new StageFailure(code)
   }
   const failed = result.stopReason === 'refusal' ? 'refusal' : result.stopReason === 'max_tokens' ? 'max_tokens' : null
@@ -212,6 +220,12 @@ export async function cancelRun(runId: string) {
 async function isOpen(runId: string): Promise<boolean> {
   const r = await prisma.generationRun.findUnique({ where: { id: runId }, select: { status: true } })
   return r?.status === GenerationRunStatus.ACTIVE || r?.status === GenerationRunStatus.READY_FOR_REVIEW
+}
+
+/** Cancelled or published: nothing more is written for this run. */
+async function isClosed(runId: string): Promise<boolean> {
+  const r = await prisma.generationRun.findUnique({ where: { id: runId }, select: { status: true } })
+  return !r || r.status === GenerationRunStatus.CANCELLED || r.status === GenerationRunStatus.PUBLISHED
 }
 
 // ── The stage loop ──────────────────────────────────────────────────────────────────────────────────
@@ -367,10 +381,12 @@ const discover: StageHandler = async (ctx) => {
   const seenKeys = new Set<string>()
   const seenUrls = new Set<string>()
   const dropped: string[] = []
+  const unusable: string[] = []
   const proposals = parsed.data.products.filter((p) => {
     // Retailers and review sites are never a product's source (D5.3, D6.3).
     const host = httpsHostKey(p.manufacturerUrl)
-    if (!host || isDenylisted(host)) { dropped.push(p.manufacturerUrl); return false }
+    if (!host) { unusable.push(p.manufacturerUrl); return false }
+    if (isDenylisted(host)) { dropped.push(p.manufacturerUrl); return false }
     const k = productKey(p.brand, p.model)
     if (seenKeys.has(k) || seenUrls.has(p.manufacturerUrl)) return false
     seenKeys.add(k); seenUrls.add(p.manufacturerUrl)
@@ -401,7 +417,7 @@ const discover: StageHandler = async (ctx) => {
     productIds.push(created.id); createdCount++
   }
   if (warning) await prisma.generationRun.update({ where: { id: ctx.runId }, data: { warning } })
-  return { proposed: proposals.length, created: createdCount, linkedExisting: linked, skippedRejected, droppedRetailers: dropped.length, warning, productIds }
+  return { proposed: proposals.length, created: createdCount, linkedExisting: linked, skippedRejected, droppedRetailers: dropped.length, droppedUnusableUrls: unusable.length, warning, productIds }
 }
 
 // ── VERIFY (brand domains) ──────────────────────────────────────────────────────────────────────────
@@ -668,8 +684,9 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
   const r = await callModel(ctx, RunStage.EXTRACT, product.id, promptChars, 0, () => ctx.model.extract(input, ctx.config))
   const extraction = ExtractionSchema.safeParse(r.output)
   if (!extraction.success) throw new StageFailure('validation_failed', describeIssues(extraction.error))
-  // Cancelled while this item was being fetched or extracted: write nothing.
-  if (!(await isOpen(ctx.runId))) return void (await done({ error: 'cancelled' }))
+  // Cancelled (or published) while this item was being fetched or extracted: write nothing. A run marked
+  // stalled meanwhile keeps the result: the call was paid for and Resume would not retry a done item.
+  if (await isClosed(ctx.runId)) return void (await done({ error: 'cancelled' }))
 
   // Check 4: node fit, only HIGH auto-approves.
   const fit = extraction.data.nodeFit
@@ -766,16 +783,23 @@ export async function requeueWaitingForHost(host: string): Promise<number> {
   })
   const all = waiting.filter((w) => w.product.manufacturerUrl && httpsHostKey(w.product.manufacturerUrl) === host)
   // Items of a run already published or cancelled are closed: their products wait for the node's next run.
-  const openRuns = new Set((await prisma.generationRun.findMany({
-    where: { id: { in: [...new Set(all.map((w) => w.runId))] }, status: { in: [GenerationRunStatus.ACTIVE, GenerationRunStatus.READY_FOR_REVIEW] } },
-    select: { id: true },
-  })).map((r) => r.id))
-  const closed = all.filter((w) => !openRuns.has(w.runId))
+  // A stalled or failed run is not closed (Resume continues it): its items go back to pending and run on
+  // Resume; only an active or ready run picks them up now.
+  const runs = await prisma.generationRun.findMany({ where: { id: { in: [...new Set(all.map((w) => w.runId))] } }, select: { id: true, status: true } })
+  const statusOf = new Map(runs.map((r) => [r.id, r.status]))
+  const isClosed = (runId: string) => {
+    const st = statusOf.get(runId)
+    return st === undefined || st === GenerationRunStatus.PUBLISHED || st === GenerationRunStatus.CANCELLED
+  }
+  const closed = all.filter((w) => isClosed(w.runId))
   if (closed.length) await prisma.extractionItem.updateMany({ where: { id: { in: closed.map((c) => c.id) } }, data: { status: ItemStatus.FAILED, error: 'run closed before the brand domain was confirmed; start a new run' } })
-  const matching = all.filter((w) => openRuns.has(w.runId))
+  const matching = all.filter((w) => !isClosed(w.runId))
   if (!matching.length) return 0
   await prisma.extractionItem.updateMany({ where: { id: { in: matching.map((m) => m.id) } }, data: { status: ItemStatus.PENDING } })
-  for (const runId of new Set(matching.map((m) => m.runId))) inBackground(runId, () => processPendingItems(runId))
+  const live: GenerationRunStatus[] = [GenerationRunStatus.ACTIVE, GenerationRunStatus.READY_FOR_REVIEW]
+  for (const runId of new Set(matching.map((m) => m.runId))) {
+    if (live.includes(statusOf.get(runId) ?? GenerationRunStatus.CANCELLED)) inBackground(runId, () => processPendingItems(runId))
+  }
   return matching.length
 }
 

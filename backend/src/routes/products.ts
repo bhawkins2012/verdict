@@ -2,11 +2,11 @@ import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { Prisma, PriceTier } from '@prisma/client'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/authenticate'
+import { authenticate, optionalAuthenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
 import { NodeKind } from '@prisma/client'
 import { productLevers } from '../catalog/public'
-import { publicProductWhere } from '../catalog/products'
+import { publicProductWhere, visibleProductWhere } from '../catalog/products'
 
 export const productsRouter = Router()
 
@@ -66,9 +66,9 @@ productsRouter.get('/', async (req: Request, res: Response) => {
 })
 
 // GET /api/products/:id
-productsRouter.get('/:id', async (req: Request, res: Response) => {
+productsRouter.get('/:id', optionalAuthenticate, async (req: Request, res: Response) => {
   const product = await prisma.product.findFirst({
-    where: { id: req.params.id, ...publicProductWhere() },
+    where: { id: req.params.id, ...visibleProductWhere(req.userId) },
     include: {
       _count: { select: { reviewThreads: true, aggregatedReviews: true } },
       node: { select: { slug: true, name: true, publishedAt: true } },

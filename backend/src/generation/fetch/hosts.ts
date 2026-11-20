@@ -23,6 +23,16 @@ export function httpsHostKey(url: string): string | null {
   }
 }
 
+/** hostKey of any http(s) URL's host (for classifying links, never for fetching), or null. */
+export function anyHostKey(url: string): string | null {
+  try {
+    const u = new URL(url)
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname ? hostKey(u.hostname) : null
+  } catch {
+    return null
+  }
+}
+
 /** The registrable-domain label (left of the public suffix), hyphens removed: "maxi-cosi.co.uk" → "maxicosi". */
 export function registrableLabel(host: string): string | null {
   // Private suffixes (myshopify.com, …) count as public here, so a shop subdomain never passes the brand check.

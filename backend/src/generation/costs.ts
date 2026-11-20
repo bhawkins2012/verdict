@@ -42,6 +42,25 @@ export function worstCaseUsd(model: string, promptChars: number, maxTokens: numb
   return Math.round(((input * p.input + maxTokens * p.output) / 1_000_000 + maxSearches * WEB_SEARCH_USD) * 1e6) / 1e6
 }
 
+/** Input tokens assumed per web search result in the worst case. */
+export const SEARCH_RESULT_TOKENS = 10_000
+
+/**
+ * Worst case for a call of several requests where each resends the conversation so far (discovery resumes
+ * after pause_turn): request k reads the prompt plus everything earlier requests returned (their search
+ * results and up to max_tokens of output each) plus its own search results, and may search again.
+ */
+export function worstCaseResumedUsd(model: string, promptChars: number, maxTokens: number, maxSearches: number, requests: number): number | null {
+  const searchTokens = maxSearches * SEARCH_RESULT_TOKENS
+  let total = 0
+  for (let k = 1; k <= requests; k++) {
+    const one = worstCaseUsd(model, promptChars, maxTokens, maxSearches, k * searchTokens + (k - 1) * maxTokens)
+    if (one === null) return null
+    total += one
+  }
+  return Math.round(total * 1e6) / 1e6
+}
+
 export class CapError extends Error {
   constructor(readonly cap: 'run_cap' | 'daily_cap' | 'unpriced_model', detail: string) {
     super(detail)

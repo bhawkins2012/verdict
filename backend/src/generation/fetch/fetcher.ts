@@ -8,6 +8,7 @@ import { BrandDomainStatus, FetchOutcome } from '@prisma/client'
 import { prisma } from '../../lib/prisma'
 import { resolveFrontendUrl } from '../../lib/frontendUrl'
 import { hostKey, httpsHostKey, isDenylisted } from './hosts'
+import { looksLikeChallenge, parseHtml } from './html'
 import { decideRobots, ROBOTS_TTL_MS, RobotsStatus, USER_AGENT_TOKEN } from './robots'
 
 export const MIN_GAP_MS = 1000
@@ -246,7 +247,12 @@ export class Fetcher {
         url = new URL(loc, url).toString()
         continue
       }
-      if (res.status >= 200 && res.status < 300) return { status: 'ok', text: new TextDecoder().decode(res.body).slice(0, 500_000) }
+      if (res.status >= 200 && res.status < 300) {
+        const text = new TextDecoder().decode(res.body).slice(0, 500_000)
+        // A bot challenge served with 200 instead of a robots file is a block too, not "no rules".
+        if (/html/i.test(res.headers.get('content-type') ?? '') && looksLikeChallenge(parseHtml(text, url), text)) return { status: 'blocked', text: null }
+        return { status: 'ok', text }
+      }
       if (res.status >= 400 && res.status < 500) return { status: 'allow_all', text: null }
       return { status: 'disallow_all', text: null }
     }

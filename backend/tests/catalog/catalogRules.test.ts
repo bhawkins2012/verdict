@@ -47,7 +47,7 @@ describe('products added by users', () => {
     const page = await api().get(`/api/categories/${slug}`)
     expect(page.body.products.map((p: { id: string }) => p.id)).not.toContain(extra[0])
     const review = await api().get(`/api/admin/nodes/${t.nodeId}/review`).set(as())
-    expect(review.body.products.find((p: { id: string }) => p.id === extra[0])).toMatchObject({ status: 'PROPOSED', attentionCheck: 'added_by_user' })
+    expect(review.body.products.find((p: { id: string }) => p.id === extra[0])).toMatchObject({ status: 'PROPOSED', attentionCheck: 'not_in_catalog' })
     // Approve one into the catalog; reject another.
     expect((await api().post('/api/admin/products/approve').set(as()).send({ productIds: [extra[0]] })).body).toEqual({ approved: 1 })
     expect(await prisma.product.findUniqueOrThrow({ where: { id: extra[0] } })).toMatchObject({ catalogStatus: CatalogStatus.APPROVED, approvedVia: 'ADMIN' })
@@ -157,5 +157,75 @@ describe('manual values on a challenge page', () => {
     expect(res.body).toMatchObject({ adminAttested: true, attestedFetchOutcome: 'BLOCKED' })
     expect((await prisma.fetchHost.findUniqueOrThrow({ where: { host } })).blockedUntil).not.toBeNull()
     void productPage
+  })
+})
+
+describe('people already reviewing a product', () => {
+  it('keep seeing and reviewing it after an admin rejects it; everyone else gets 404', async () => {
+    const t = await testTree(); trees.push(t)
+    const slug = (await prisma.taxonomyNode.findUniqueOrThrow({ where: { id: t.nodeId } })).slug
+    const other = await registerUser()
+    try {
+      const made = await api().post('/api/products').set(bearer(user.accessToken)).send({ name: `Kept ${uid()}`, brand: 'Someone', category: slug })
+      const id = made.body.id as string
+      await api().post('/api/reviews').set(bearer(user.accessToken)).send({ productId: id, stage: 'INITIAL', scoreOverall: 8 }).expect(201)
+      await api().post('/api/admin/products/reject').set(as()).send({ productIds: [id] }).expect(200)
+      // The reviewer: the page (the check-in links to it) and the next stage both still work.
+      expect((await api().get(`/api/products/${id}`).set(bearer(user.accessToken))).status).toBe(200)
+      expect((await api().post('/api/reviews').set(bearer(user.accessToken)).send({ productId: id, stage: 'TWO_WEEKS', scoreOverall: 7 })).status).toBe(201)
+      // Anyone else, signed in or not: gone.
+      expect((await api().get(`/api/products/${id}`)).status).toBe(404)
+      expect((await api().get(`/api/products/${id}`).set(bearer(other.accessToken))).status).toBe(404)
+      expect((await api().post('/api/reviews').set(bearer(other.accessToken)).send({ productId: id, stage: 'INITIAL', scoreOverall: 5 })).status).toBe(404)
+      // A bad token reads as anonymous on the public page (no 401, so no refresh loop).
+      expect((await api().get(`/api/products/${id}`).set('Authorization', 'Bearer nonsense')).status).toBe(404)
+      await prisma.product.delete({ where: { id } })
+    } finally {
+      await cleanup([other.id])
+    }
+  })
+
+  it('a discovered product that a later publish unlists stays reviewable by its reviewers', async () => {
+    process.env.GENERATION_MIN_PRODUCTS = '5' // so the node still publishes with one product fewer
+    const { t, ids, products } = await ready()
+    const run = await prisma.generationRun.create({ data: { nodeId: t.nodeId, kind: 'NODE', mode: 'DRY_RUN', model: 'dry-run', capUsd: 10, status: 'READY_FOR_REVIEW' } })
+    await prisma.product.update({ where: { id: products[0].id }, data: { discoveredByRunId: run.id } })
+    await api().post(`/api/admin/nodes/${t.nodeId}/publish`).set(as()).send({ leverIds: ids }).expect(200)
+    await api().post('/api/reviews').set(bearer(user.accessToken)).send({ productId: products[0].id, stage: 'INITIAL', scoreOverall: 8 }).expect(201)
+    await api().post('/api/admin/products/reject').set(as()).send({ productIds: [products[0].id] }).expect(200)
+    await api().post(`/api/admin/nodes/${t.nodeId}/publish`).set(as()).send({ leverIds: ids }).expect(200)
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: products[0].id } })).listed).toBe(false)
+    expect((await api().get(`/api/products/${products[0].id}`)).status).toBe(404)
+    expect((await api().get(`/api/products/${products[0].id}`).set(bearer(user.accessToken))).status).toBe(200)
+    expect((await api().post('/api/reviews').set(bearer(user.accessToken)).send({ productId: products[0].id, stage: 'TWO_WEEKS', scoreOverall: 6 })).status).toBe(201)
+    await prisma.reviewThread.deleteMany({ where: { productId: products[0].id } })
+  })
+})
+
+describe('retailer check on approval', () => {
+  it('uses the manufacturer page when a run found one, and catches http:// retailer links', async () => {
+    const t = await testTree(); trees.push(t)
+    const [a, b] = await addProducts(t.nodeId, 2, { status: CatalogStatus.PROPOSED })
+    // Added with an Amazon link, then a run found the brand's page: approvable.
+    await prisma.product.update({ where: { id: a.id }, data: { websiteUrl: 'https://www.amazon.com/dp/B0', manufacturerUrl: 'https://acme.example/glide' } })
+    expect((await api().post('/api/admin/products/approve').set(as()).send({ productIds: [a.id] })).status).toBe(200)
+    // An http:// retailer link is still a retailer.
+    await prisma.product.update({ where: { id: b.id }, data: { websiteUrl: 'http://www.walmart.com/ip/1', manufacturerUrl: null } })
+    expect((await api().post('/api/admin/products/approve').set(as()).send({ productIds: [b.id] })).status).toBe(400)
+  })
+})
+
+describe('stale corrections', () => {
+  it('a correction of a value that changed since the admin opened it is refused (409)', async () => {
+    const t = await testTree(); trees.push(t)
+    const [l] = await addLevers(t.nodeId, [{ name: 'Weight', type: 'MEASUREMENT', unit: 'lb' }])
+    const [p] = await addProducts(t.nodeId, 1)
+    const v = await setValue(p.id, l.definitionId, { status: ValueStatus.PROPOSED, number: 9 })
+    const seen = v.updatedAt.toISOString()
+    await new Promise((r) => setTimeout(r, 5))
+    await prisma.productLeverValue.update({ where: { id: v.id }, data: { valueNumber: 12, evidenceQuote: 'Weight: 12 lb' } })
+    expect((await api().patch(`/api/admin/values/${v.id}`).set(as()).send({ number: 9.5, seen })).status).toBe(409)
+    const fresh = (await prisma.productLeverValue.findUniqueOrThrow({ where: { id: v.id } })).updatedAt.toISOString()
+    expect((await api().patch(`/api/admin/values/${v.id}`).set(as()).send({ number: 12.5, seen: fresh })).status).toBe(200)
   })
 })

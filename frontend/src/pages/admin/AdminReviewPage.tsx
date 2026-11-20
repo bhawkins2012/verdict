@@ -529,7 +529,7 @@ function toValueBody(lever: BoardLever, s: Record<string, string>): Partial<Type
 
 function EditValue({ value, lever, onDone }: { value: ReviewValue; lever: BoardLever; onDone: () => void }) {
   const [state, setState] = useState<Record<string, string>>({ number: value.value.number?.toString() ?? '', text: value.value.text ?? '', bool: value.value.bool === null ? '' : value.value.bool ? 'yes' : 'no', list: value.value.list.join(' | ') })
-  const save = useMutation({ mutationFn: () => api.patch(`/admin/values/${value.id}`, toValueBody(lever, state)), onSuccess: onDone })
+  const save = useMutation({ mutationFn: () => api.patch(`/admin/values/${value.id}`, { ...toValueBody(lever, state), seen: value.updatedAt }), onSuccess: onDone })
   return (
     <form className="space-y-1 pt-2 border-t border-ink-100" onSubmit={(e) => { e.preventDefault(); save.mutate() }}>
       <p className="text-xs text-ink-500">The quote and source stay; the corrected value must be accepted again.</p>

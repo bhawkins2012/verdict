@@ -223,6 +223,14 @@ describe('review findings: robots.txt and hosts', () => {
     expect((await prisma.fetchHost.findUniqueOrThrow({ where: { host } })).blockedUntil?.getTime()).toBe(web.clock + BLOCK_PAUSE_MS)
   })
 
+  it('a bot challenge served with 200 in place of robots.txt is a block, not "no rules"', async () => {
+    const { host, web, fetcher, ready } = setup()
+    await ready
+    web.set(`https://${host}/robots.txt`, { body: '<html><head><title>Just a moment...</title></head><body><h1>Checking your browser</h1></body></html>' })
+    expect((await fetcher.fetch(`https://${host}/p`, brand, ['html'])).outcome).toBe(FetchOutcome.BLOCKED)
+    expect(web.urls()).toEqual([`https://${host}/robots.txt`])
+  })
+
   it('robots.txt is read from the origin the URL names (a www-only site)', async () => {
     const { host, web, fetcher, ready } = setup()
     await ready

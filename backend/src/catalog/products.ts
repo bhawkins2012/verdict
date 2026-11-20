@@ -23,3 +23,12 @@ export function publicProductWhere(): Prisma.ProductWhereInput {
     ...(isDevEnvironment() ? {} : { isDryRun: false }),
   }
 }
+
+/**
+ * What one viewer can see: public products, plus any product the viewer already reviews (has a thread
+ * for). A product rejected or unlisted after someone started reviewing it stays reviewable by them, so
+ * their check-ins keep working; it is gone only for everyone else.
+ */
+export function visibleProductWhere(userId: string | undefined): Prisma.ProductWhereInput {
+  return userId ? { OR: [publicProductWhere(), { reviewThreads: { some: { userId } } }] } : publicProductWhere()
+}

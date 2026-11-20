@@ -10,7 +10,7 @@ import { prisma } from '../lib/prisma'
 import { AppError } from '../middleware/errorHandler'
 import { lockNode, loadTaxonomy } from './taxonomy'
 import { IN_CATALOG } from './products'
-import { httpsHostKey, isDenylisted } from '../generation/fetch/hosts'
+import { anyHostKey, isDenylisted } from '../generation/fetch/hosts'
 import { brandKey, quoteAppearsIn } from './text'
 import { EMPTY_VALUE, presentTyped, toValueData, valueColumnsOf, valueInputSchema } from './values'
 import { isVerifiedFor } from '../generation/brands'
@@ -92,11 +92,13 @@ export async function markUnknown(valueId: string, userId: string, seen?: string
 }
 
 /** Correct an extracted value (for example a misread unit). The quote and source stay; it must be accepted again. */
-export async function editValue(valueId: string, rawInput: unknown, userId: string) {
+export async function editValue(valueId: string, rawInput: unknown, userId: string, seen?: string) {
   const parsed = valueInputSchema.safeParse(rawInput)
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0].message)
   return prisma.$transaction(async (tx) => {
-    const v = await lockValue(tx, valueId)
+    // `seen` matters most here: a correction is stored against the value's quote, so it must be the quote
+    // the admin was looking at.
+    const v = await lockValue(tx, valueId, seen)
     if (v.origin !== ValueOrigin.EXTRACTED) throw new AppError(400, 'Only extracted values are corrected here; enter a manual value instead')
     if (!v.evidenceQuote || !v.sourceUrl) throw new AppError(400, 'This value has no evidence to correct; enter a manual value instead')
     const shaped = toValueData(v.definition, parsed.data)
@@ -222,10 +224,13 @@ export const productDecisionSchema = z.object({ productIds: z.array(z.string().m
  */
 export async function approveProducts(productIds: string[], userId: string) {
   const candidates = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { name: true, manufacturerUrl: true, websiteUrl: true } })
-  const retailer = candidates.find((p) => [p.manufacturerUrl, p.websiteUrl].some((u) => {
-    const host = u ? httpsHostKey(u) : null
+  // The page the product is known by: its manufacturer URL when a run found one, else the URL it was added
+  // with. Any protocol counts (an http:// retailer link is still a retailer).
+  const retailer = candidates.find((p) => {
+    const u = p.manufacturerUrl ?? p.websiteUrl
+    const host = u ? anyHostKey(u) : null
     return host !== null && isDenylisted(host)
-  }))
+  })
   if (retailer) throw new AppError(400, `"${retailer.name}" links to a retailer or review site; find the manufacturer's page first`)
   const { count } = await prisma.product.updateMany({
     where: {

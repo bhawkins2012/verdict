@@ -43,6 +43,7 @@ beforeEach(() => {
   routes.clear()
   api.get.mockClear()
   api.post.mockClear()
+  api.patch.mockClear()
   data = review()
   routes.set('GET /admin/nodes/n1/review', () => data)
 })
@@ -98,6 +99,17 @@ describe('values step', () => {
     await key(first ?? null, 'Enter')
     expect(api.post.mock.calls.map((c) => [c[0], c[1]])).toEqual([['/admin/values/v0-0/accept', { seen: '2026-11-20T00:00:00.000Z' }]])
     expect(document.activeElement?.getAttribute('data-cell')).toBe('0-1')
+  })
+
+  it('E corrects the focused value, sending what the admin saw so a changed value is refused', async () => {
+    routes.set('PATCH /admin/values/v0-0', () => ({ id: 'v0-0', status: 'PROPOSED' }))
+    await open('Values')
+    await key(view?.container.querySelector('[data-cell="0-0"]') ?? null, 'e')
+    const form = [...(view?.container.querySelectorAll('form') ?? [])].find((f) => f.textContent?.includes('Save correction'))
+    expect(form).toBeDefined()
+    await act(async () => { form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await settle(2)
+    expect(api.patch).toHaveBeenCalledWith('/admin/values/v0-0', { number: 9, seen: '2026-11-20T00:00:00.000Z' })
   })
 
   it('arrow keys move between values; R rejects, U marks unknown', async () => {

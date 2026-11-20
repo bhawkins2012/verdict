@@ -17,6 +17,13 @@ export const MAX_RETRIES = 1
 export const DISCOVERY_MAX_SEARCHES = 8
 export const MAX_PAUSE_RESUMES = 3
 
+/** A call of several API requests that failed after earlier ones were billed: carries their usage. */
+export class PartialUsageError extends Error {
+  constructor(readonly inner: unknown, readonly usage: Usage) {
+    super(inner instanceof Error ? inner.message : 'model call failed')
+  }
+}
+
 export type Effort = 'medium' | 'high'
 export const STAGE_EFFORT = { place: 'high', levers: 'high', discover: 'high', extract: 'medium', explain: 'high' } as const satisfies Record<string, Effort>
 
@@ -207,24 +214,30 @@ export class AnthropicGenerationModel implements GenerationModel {
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: discoverMessage(i) }]
     let usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, webSearches: 0 }
     for (let resume = 0; ; resume++) {
-      const response = await client.messages.create({
-        model: config.model,
-        max_tokens: config.maxTokens,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: STAGE_EFFORT.discover },
-        system: DISCOVER_SYSTEM,
-        tools: [
-          { type: 'web_search_20260318', name: 'web_search', max_uses: DISCOVERY_MAX_SEARCHES, blocked_domains: blockedSearchDomains() },
-          {
-            name: 'propose_products',
-            description: 'Submit the list of products found, with manufacturer page URLs.',
-            input_schema: { ...PROPOSE_PRODUCTS_TOOL_SCHEMA, required: [...PROPOSE_PRODUCTS_TOOL_SCHEMA.required] },
-            strict: true,
-          },
-        ],
-        tool_choice: { type: 'auto' },
-        messages,
-      })
+      let response: Anthropic.Message
+      try {
+        response = await client.messages.create({
+          model: config.model,
+          max_tokens: config.maxTokens,
+          thinking: { type: 'adaptive' },
+          output_config: { effort: STAGE_EFFORT.discover },
+          system: DISCOVER_SYSTEM,
+          tools: [
+            { type: 'web_search_20260318', name: 'web_search', max_uses: DISCOVERY_MAX_SEARCHES, blocked_domains: blockedSearchDomains() },
+            {
+              name: 'propose_products',
+              description: 'Submit the list of products found, with manufacturer page URLs.',
+              input_schema: { ...PROPOSE_PRODUCTS_TOOL_SCHEMA, required: [...PROPOSE_PRODUCTS_TOOL_SCHEMA.required] },
+              strict: true,
+            },
+          ],
+          tool_choice: { type: 'auto' },
+          messages,
+        })
+      } catch (err) {
+        // Earlier requests of this call were billed: hand their usage to the caller with the error.
+        throw resume > 0 ? new PartialUsageError(err, usage) : err
+      }
       usage = addUsage(usage, usageOf(response))
       const call = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'propose_products')
       if (call) return { output: call.input, stopReason: response.stop_reason, servedModel: response.model, usage }

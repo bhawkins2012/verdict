@@ -115,6 +115,28 @@ describe('unknown is never guessed', () => {
   })
 })
 
+describe('units tied to their numbers', () => {
+  it('the adjective form with a hyphen counts ("22-lb", "5-year")', () => {
+    const d = [{ key: 'page', url: 'https://acme.example/glide', text: 'A 22-lb carrier with a 5-year warranty' }]
+    expect(checkEvidence(lb, raw({ statedValue: '22', statedUnit: 'lb', quote: 'A 22-lb carrier with a 5-year warranty' }), d).ok).toBe(true)
+    expect(checkEvidence(def(LeverType.MEASUREMENT, 'years'), raw({ statedValue: '5', statedUnit: 'years', quote: 'A 22-lb carrier with a 5-year warranty' }), d).ok).toBe(true)
+  })
+
+  it('dimensions: the three numbers are one group with the unit after it, never the unit of another group', () => {
+    const dims = def(LeverType.MEASUREMENT, 'in', { inputFormat: LeverInputFormat.DIMENSIONS })
+    const quote = 'Folded: 30 x 20 x 12 in (76 x 51 x 30 cm)'
+    const d = [{ key: 'page', url: 'https://acme.example/glide', text: quote }]
+    const dim = (length: string, width: string, height: string, unit: string) => raw({ dimensions: { length, width, height }, statedUnit: unit, quote })
+    expect(checkEvidence(dims, dim('30', '20', '12', 'cm'), d)).toMatchObject({ ok: false, reason: 'unit_not_in_quote' })
+    expect(checkEvidence(dims, dim('30', '20', '12', 'in'), d).ok).toBe(true)
+    expect(checkEvidence(dims, dim('76', '51', '30', 'cm'), d).ok).toBe(true)
+    // The page's own order may differ from length, width, height.
+    expect(checkEvidence(dims, dim('20', '30', '12', 'in'), d).ok).toBe(true)
+    const inch = [{ key: 'page', url: 'https://acme.example/glide', text: 'Size: 22" x 18" x 9"' }]
+    expect(checkEvidence(dims, raw({ dimensions: { length: '22', width: '18', height: '9' }, statedUnit: 'in', quote: 'Size: 22" x 18" x 9"' }), inch).ok).toBe(true)
+  })
+})
+
 describe('unit conversion', () => {
   it('kg → lb, cm → in, L → cu ft, months → years, rounded to 2 decimals', () => {
     expect(toCanonical(4.3, 'kg', 'lb')).toEqual({ value: 9.48, converted: true })

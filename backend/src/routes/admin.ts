@@ -259,7 +259,8 @@ adminRouter.get('/nodes/:id/review', async (req: Request, res: Response) => {
   })
   const safetyNode = t.safetyCritical(n.id)
   const rankingFor = (name: string) => survey?.rankings.find((r) => normalizeName(r.leverName) === normalizeName(name)) ?? null
-  // A product added by a user is approved for its own page but not in the catalog: shown as proposed here.
+  // A product added by a user (or seeded before generation runs) is approved for its own page but not in the
+  // catalog: shown as proposed here.
   const statusOf = (p: { catalogStatus: CatalogStatus; approvedVia: string | null }) =>
     p.catalogStatus === CatalogStatus.APPROVED && p.approvedVia === null ? CatalogStatus.PROPOSED : p.catalogStatus
   const approvedIds = new Set(products.filter((p) => statusOf(p) === CatalogStatus.APPROVED).map((p) => p.id))
@@ -271,8 +272,8 @@ adminRouter.get('/nodes/:id/review', async (req: Request, res: Response) => {
     run: run ? await presentRun(run) : null,
     products: products.map((p) => ({
       id: p.id, name: p.name, brand: p.brand, url: p.manufacturerUrl ?? p.websiteUrl, status: statusOf(p), approvedVia: p.approvedVia,
-      attentionCheck: p.attentionCheck ?? (statusOf(p) !== p.catalogStatus ? 'added_by_user' : null),
-      attentionReason: p.attentionReason ?? (statusOf(p) !== p.catalogStatus ? 'Added by a user; approve it to include it in this node\'s list' : null), listed: p.listed, isDryRun: p.isDryRun,
+      attentionCheck: p.attentionCheck ?? (statusOf(p) !== p.catalogStatus ? 'not_in_catalog' : null),
+      attentionReason: p.attentionReason ?? (statusOf(p) !== p.catalogStatus ? 'Added by a user or before generation runs, not reviewed into the catalog; approve it to include it in this node\'s list' : null), listed: p.listed, isDryRun: p.isDryRun,
       reviewedBy: p.reviewedBy?.username ?? null, item: p.extractionItems[0] ?? null,
     })),
     levers: levers.map((l) => ({
@@ -341,7 +342,9 @@ adminRouter.post('/values/:id/unknown', async (req: Request, res: Response) => {
   res.json({ id: v.id, status: v.status })
 })
 adminRouter.patch('/values/:id', async (req: Request, res: Response) => {
-  const v = await editValue(req.params.id, req.body, userId(req))
+  // The body is the corrected value, plus `seen` (the value's updatedAt as the screen showed it).
+  const { seen, ...value } = parse(decisionSchema.passthrough(), req.body ?? {})
+  const v = await editValue(req.params.id, value, userId(req), seen)
   res.json({ id: v.id, status: v.status })
 })
 adminRouter.post('/nodes/:id/values/bulk-accept', async (req: Request, res: Response) => {

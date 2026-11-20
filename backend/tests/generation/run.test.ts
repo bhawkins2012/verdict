@@ -6,8 +6,9 @@ import {
 } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
 import { flushGenerationRuns, reconcileGeneration, STALE_MS } from '../../src/generation/runs'
-import { CapError, reserveCall, runSpendUsd, worstCaseUsd } from '../../src/generation/costs'
-import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES } from '../../src/generation/model'
+import { CapError, costUsd, reserveCall, runSpendUsd, SEARCH_RESULT_TOKENS, worstCaseResumedUsd, worstCaseUsd } from '../../src/generation/costs'
+import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, PartialUsageError } from '../../src/generation/model'
+import Anthropic from '@anthropic-ai/sdk'
 import { setTransactionalProviderForTests } from '../../src/auth/mailer'
 import { makeTextPdf } from '../../src/generation/fixtures/pdf'
 import { api, bearer, cleanup } from '../helpers'
@@ -376,8 +377,11 @@ describe('caps, resume and stuck stages', () => {
     web(s); model(s)
     const r = await run(tree)
     const call = await prisma.generationCall.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.DISCOVER } })
-    const one = worstCaseUsd('claude-opus-5-5', 4_000, Number(process.env.GENERATION_MAX_TOKENS ?? 16000), DISCOVERY_MAX_SEARCHES, DISCOVERY_MAX_SEARCHES * 10_000)
-    expect(Number(call.reservedUsd)).toBeCloseTo((one ?? 0) * (MAX_PAUSE_RESUMES + 1), 4)
+    const maxTokens = Number(process.env.GENERATION_MAX_TOKENS ?? 16000)
+    const first = worstCaseUsd('claude-opus-5-5', 4_000, maxTokens, DISCOVERY_MAX_SEARCHES, DISCOVERY_MAX_SEARCHES * SEARCH_RESULT_TOKENS) ?? 0
+    // Every resume resends the conversation so far, so the four requests cost more than four first requests.
+    expect(Number(call.reservedUsd)).toBeCloseTo(worstCaseResumedUsd('claude-opus-5-5', 4_000, maxTokens, DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES + 1) ?? -1, 6)
+    expect(Number(call.reservedUsd)).toBeGreaterThan(first * (MAX_PAUSE_RESUMES + 1))
   })
 
   it('a live call that fails without usage keeps counting its reservation (cost stays null, not 0)', async () => {
@@ -392,6 +396,44 @@ describe('caps, resume and stuck stages', () => {
     expect(call.costUsd).toBeNull()
     expect(Number(call.reservedUsd)).toBeGreaterThan(0)
     expect(await runSpendUsd(r.id)).toBeCloseTo(Number(call.reservedUsd), 6)
+  })
+
+  it('an API error status is not billed: the call costs 0, or what its earlier requests used', async () => {
+    liveMode({ GENERATION_RUN_CAP_USD: '1000', GENERATION_DAILY_CAP_USD: '10000' })
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    web(s)
+    const m = model(s)
+    m.answers.place = () => { throw new Anthropic.APIError(529, { type: 'overloaded_error' }, 'Overloaded', new Headers()) }
+    const r = await run(tree)
+    expect(r.error).toBe('PLACE: api_error:529')
+    const call = await prisma.generationCall.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.PLACE } })
+    expect(Number(call.costUsd)).toBe(0)
+    // Discovery fails on a resume after a billed first request: that request's usage is the cost.
+    const tree2 = await testTree(); trees.push(tree2)
+    const m2 = model(specs(10))
+    const used = { inputTokens: 100_000, outputTokens: 10_000, cacheReadTokens: 0, webSearches: 8 }
+    m2.answers.discover = () => { throw new PartialUsageError(new Anthropic.APIError(500, { type: 'api_error' }, 'Internal', new Headers()), used) }
+    const r2 = await run(tree2)
+    const d = await prisma.generationCall.findFirstOrThrow({ where: { runId: r2.id, stage: RunStage.DISCOVER } })
+    expect(Number(d.costUsd)).toBeCloseTo(costUsd('claude-opus-5-5', used) ?? -1, 6)
+    expect(d.inputTokens).toBe(100_000)
+  })
+
+  it('confirming a brand puts a stalled run\'s waiting items back to pending for Resume (not failed)', async () => {
+    const tree = await testTree(); trees.push(tree)
+    const host = `stall${uid()}.example`
+    hosts.push(host)
+    const r = await prisma.generationRun.create({ data: { nodeId: tree.nodeId, kind: 'NODE', mode: 'DRY_RUN', model: 'dry-run', capUsd: 10, status: 'STALLED', error: 'EXTRACT: daily_cap' } })
+    const p = await prisma.product.create({ data: { name: `Stalled ${uid()}`, brand: 'Stall', category: 'x', nodeId: tree.nodeId, manufacturerUrl: `https://${host}/p`, discoveredByRunId: r.id } })
+    const item = await prisma.extractionItem.create({ data: { runId: r.id, productId: p.id, status: ItemStatus.WAITING } })
+    const b = await prisma.brandDomain.create({ data: { brand: 'Stall', brandKey: 'stall', host, status: 'PENDING_CONFIRMATION' } })
+    const res = await api().post(`/api/admin/brands/${b.id}/confirm`).set(bearer(admin.accessToken))
+    expect(res.body.requeued).toBe(1)
+    await flushGenerationRuns()
+    // Pending, and not processed while the run is stalled: Resume picks it up.
+    expect(await prisma.extractionItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ status: ItemStatus.PENDING })
+    await prisma.extractionItem.deleteMany({ where: { runId: r.id } })
   })
 
   it('resume puts back only items whose worker stopped; a live item is not run twice', async () => {

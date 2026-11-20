@@ -64,11 +64,33 @@ function unitInQuote(statedUnit: string | null, quote: string): boolean {
  * Ties the unit to the number, so "9.1 kg; up to 22 lb" never reads as 22 kg.
  */
 export function numberWithUnit(stated: string, statedUnit: string | null, quote: string): boolean {
-  const spellings = spellingsFor(statedUnit).filter((s) => s.length > 0).sort((a, b) => b.length - a.length)
-  if (spellings.length === 0) return false
+  const units = unitPattern(statedUnit)
+  if (units === null) return false
   const q = normalizeEvidence(quote).toLowerCase()
-  const units = spellings.map((s) => escapeRe(s.toLowerCase())).join('|')
-  return new RegExp(`(?<![\\d.,])${escapeRe(stated.trim())}\\s?(?:${units})(?![a-z])`).test(q)
+  // "4.3 kg", "4.3kg" and the adjective form "22-lb", "5-year".
+  return new RegExp(`(?<![\\d.,])${escapeRe(stated.trim())}[\\s-]?(?:${units})(?![a-z])`).test(q)
+}
+
+/**
+ * Does the quote state these three numbers as one L × W × H group with the unit after the last
+ * ("22 x 18 x 9 in", "22" x 18" x 9"")? Any order of the three, since pages differ; but they must be one
+ * group, so "30 x 20 x 12 in (76 x 51 x 30 cm)" never reads as 30 × 20 × 12 cm.
+ */
+export function dimensionsWithUnit(parts: readonly string[], statedUnit: string | null, quote: string): boolean {
+  const units = unitPattern(statedUnit)
+  if (units === null || parts.length !== 3) return false
+  const q = normalizeEvidence(quote).toLowerCase()
+  const num = (p: string) => `(?<![\\d.,])${escapeRe(p.trim())}(?![\\d]|[.,]\\d)`
+  // Between two numbers: a separator (x, ×, by, *) and at most a unit or a dimension word, no other number.
+  const gap = '[^\\d]{1,16}?'
+  const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+  return orders.some(([a, b, c]) =>
+    new RegExp(`${num(parts[a])}${gap}${num(parts[b])}${gap}${num(parts[c])}[\\s-]?(?:${units})(?![a-z])`).test(q))
+}
+
+function unitPattern(statedUnit: string | null): string | null {
+  const spellings = spellingsFor(statedUnit).filter((s) => s.length > 0).sort((a, b) => b.length - a.length)
+  return spellings.length === 0 ? null : spellings.map((s) => escapeRe(s.toLowerCase())).join('|')
 }
 
 const NEGATION = /\b(no|not|none|without|n\/a|non)\b|\bnon-/i
@@ -107,7 +129,7 @@ export function checkEvidence(def: DefinitionForEvidence, raw: ExtractedValue, d
         if (parts.some((p) => !numberInQuote(p, quote))) return fail('number_not_in_quote')
         const inches = nums.map((n) => toCanonical(n ?? NaN, raw.statedUnit, 'in'))
         if (inches.some((c) => c === null)) return fail('unit_unknown')
-        if (!parts.some((p) => numberWithUnit(p, raw.statedUnit, quote))) return fail('unit_not_in_quote')
+        if (!dimensionsWithUnit(parts, raw.statedUnit, quote)) return fail('unit_not_in_quote')
         const [l, w, h] = inches.map((c) => c?.value ?? 0)
         if (inches.some((c) => c?.converted)) confidence = lower(confidence, Confidence.MEDIUM)
         const oneHand = raw.oneHandFold === true && /one[- ]hand/i.test(quote) ? true : null
