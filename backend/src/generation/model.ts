@@ -15,7 +15,7 @@ export const PROMPT_VERSION = 'generation-v1'
 export const REQUEST_TIMEOUT_MS = 4 * 60 * 1000
 export const MAX_RETRIES = 1
 export const DISCOVERY_MAX_SEARCHES = 8
-const MAX_PAUSE_RESUMES = 3
+export const MAX_PAUSE_RESUMES = 3
 
 export type Effort = 'medium' | 'high'
 export const STAGE_EFFORT = { place: 'high', levers: 'high', discover: 'high', extract: 'medium', explain: 'high' } as const satisfies Record<string, Effort>

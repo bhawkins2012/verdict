@@ -19,12 +19,12 @@ import { GenerationConfig, loadGenerationConfig } from './config'
 import { CapError, estimateNodeUsd, reserveCall, settleCall, worstCaseUsd } from './costs'
 import { checkEvidence, EvidenceDocument } from './evidence'
 import { Fetcher, fetcherFor } from './fetch/fetcher'
-import { httpsHostKey } from './fetch/hosts'
+import { httpsHostKey, isDenylisted } from './fetch/hosts'
 import { excerpt, looksLikeChallenge, parseHtml } from './fetch/html'
 import { extractPdfText } from './fetch/pdf'
 import { DryRunModel } from './fixtures/dryRunModel'
 import { fixtureTransport } from './fixtures/site'
-import { DISCOVERY_MAX_SEARCHES, ExtractDocument, ExtractLever, GenerationModel, liveModel, ModelResult, overrideModel } from './model'
+import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, ExtractDocument, ExtractLever, GenerationModel, liveModel, ModelResult, overrideModel } from './model'
 import { notifyRunReady } from './notify'
 import {
   describeIssues, DiscoverySchema, ExplainerSchema, ExtractedValue, ExtractionSchema, LeverSetSchema, MIN_PRODUCTS, PlacementSchema,
@@ -104,9 +104,11 @@ async function contextFor(runId: string): Promise<RunContext> {
 
 /** One model call: reserved against the caps first (live), settled after, refusals and truncation fail the stage. */
 async function callModel(ctx: RunContext, stage: RunStage, productId: string | null, promptChars: number, maxSearches: number,
-  call: () => Promise<ModelResult>): Promise<ModelResult> {
+  call: () => Promise<ModelResult>, requests = 1): Promise<ModelResult> {
   const live = ctx.mode === LeverRunMode.LIVE
-  const reserved = live ? worstCaseUsd(ctx.config.model, promptChars, ctx.config.maxTokens, maxSearches, maxSearches * 10_000) : 0
+  // One call may be several API requests (discovery resumes pause_turn): reserve the worst case of each.
+  const one = live ? worstCaseUsd(ctx.config.model, promptChars, ctx.config.maxTokens, maxSearches, maxSearches * 10_000) : 0
+  const reserved = one === null ? null : one * requests
   const callId = await (live
     ? reserveCall({ runId: ctx.runId, stage, productId, model: ctx.config.model, reservedUsd: reserved, runCapUsd: ctx.config.runCapUsd, dailyCapUsd: ctx.config.dailyCapUsd })
     : prisma.generationCall.create({ data: { runId: ctx.runId, stage, productId, model: 'dry-run', reservedUsd: 0 }, select: { id: true } }).then((c) => c.id))
@@ -172,17 +174,24 @@ export async function resumeRun(runId: string) {
   const resumable = run.status === GenerationRunStatus.STALLED || run.status === GenerationRunStatus.FAILED
     || (run.status === GenerationRunStatus.READY_FOR_REVIEW && pendingItems > 0)
   if (!resumable) throw new AppError(409, `A ${run.status.toLowerCase().replace(/_/g, ' ')} run cannot be resumed`)
-  await prisma.$transaction([
-    prisma.generationRunStage.updateMany({
-      where: { runId, status: { in: [StageStatus.STALLED, StageStatus.FAILED, StageStatus.RUNNING] } },
-      data: { status: StageStatus.PENDING, error: null },
-    }),
-    prisma.extractionItem.updateMany({ where: { runId, status: ItemStatus.RUNNING }, data: { status: ItemStatus.PENDING } }),
-    prisma.generationRun.update({
-      where: { id: runId },
-      data: { status: run.status === GenerationRunStatus.READY_FOR_REVIEW ? run.status : GenerationRunStatus.ACTIVE, error: null },
-    }),
-  ])
+  const stale = new Date(Date.now() - STALE_MS)
+  try {
+    await prisma.$transaction([
+      prisma.generationRunStage.updateMany({
+        where: { runId, status: { in: [StageStatus.STALLED, StageStatus.FAILED] } },
+        data: { status: StageStatus.PENDING, error: null },
+      }),
+      // Only items whose worker stopped: a live one is still being processed and must not run twice.
+      prisma.extractionItem.updateMany({ where: { runId, status: ItemStatus.RUNNING, heartbeatAt: { lt: stale } }, data: { status: ItemStatus.PENDING } }),
+      prisma.generationRun.update({
+        where: { id: runId },
+        data: { status: run.status === GenerationRunStatus.READY_FOR_REVIEW ? run.status : GenerationRunStatus.ACTIVE, error: null },
+      }),
+    ])
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') throw new AppError(409, 'Another run on this node is open: finish or cancel it first')
+    throw err
+  }
   logger.info('Generation run resumed', { runId })
   if (run.status === GenerationRunStatus.READY_FOR_REVIEW) inBackground(runId, () => processPendingItems(runId))
   else inBackground(runId, () => advance(runId))
@@ -349,7 +358,7 @@ const productKey = (brand: string, name: string) => `${brandKey(brand)}|${wordsK
 const discover: StageHandler = async (ctx) => {
   const t = await loadTaxonomy()
   const input = { nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path: t.path(ctx.node.id).map((n) => n.name), searchTerms: ctx.node.searchTerms, notes: ctx.notes }
-  const r = await callModel(ctx, RunStage.DISCOVER, null, 4_000, DISCOVERY_MAX_SEARCHES, () => ctx.model.discover(input, ctx.config))
+  const r = await callModel(ctx, RunStage.DISCOVER, null, 4_000, DISCOVERY_MAX_SEARCHES, () => ctx.model.discover(input, ctx.config), MAX_PAUSE_RESUMES + 1)
   if (r.output === null) throw new StageFailure('no_result', 'the model ended without proposing products')
   const parsed = DiscoverySchema.safeParse(r.output)
   if (!parsed.success) throw new StageFailure('validation_failed', describeIssues(parsed.error))
@@ -357,7 +366,11 @@ const discover: StageHandler = async (ctx) => {
   // De-duplicate within the list (same brand and model, or same URL).
   const seenKeys = new Set<string>()
   const seenUrls = new Set<string>()
+  const dropped: string[] = []
   const proposals = parsed.data.products.filter((p) => {
+    // Retailers and review sites are never a product's source (D5.3, D6.3).
+    const host = httpsHostKey(p.manufacturerUrl)
+    if (!host || isDenylisted(host)) { dropped.push(p.manufacturerUrl); return false }
     const k = productKey(p.brand, p.model)
     if (seenKeys.has(k) || seenUrls.has(p.manufacturerUrl)) return false
     seenKeys.add(k); seenUrls.add(p.manufacturerUrl)
@@ -388,7 +401,7 @@ const discover: StageHandler = async (ctx) => {
     productIds.push(created.id); createdCount++
   }
   if (warning) await prisma.generationRun.update({ where: { id: ctx.runId }, data: { warning } })
-  return { proposed: proposals.length, created: createdCount, linkedExisting: linked, skippedRejected, warning, productIds }
+  return { proposed: proposals.length, created: createdCount, linkedExisting: linked, skippedRejected, droppedRetailers: dropped.length, warning, productIds }
 }
 
 // ── VERIFY (brand domains) ──────────────────────────────────────────────────────────────────────────
@@ -513,18 +526,24 @@ async function storeText(ctx: RunContext, url: string, kind: FetchedKind, produc
   })
 }
 
-/** Store a value unless an admin already decided it (accepted) or entered it (manual). */
-async function writeValue(productId: string, definitionId: string, data: Omit<Prisma.ProductLeverValueUncheckedCreateInput, 'productId' | 'definitionId'>): Promise<void> {
-  const existing = await prisma.productLeverValue.findUnique({ where: { productId_definitionId: { productId, definitionId } }, select: { id: true, status: true, origin: true } })
-  if (existing && (existing.status === ValueStatus.ACCEPTED || existing.origin === ValueOrigin.MANUAL)) return
-  if (existing) {
-    await prisma.productLeverValue.update({
-      where: { id: existing.id },
-      data: { ...data, reviewedById: null, reviewedAt: null, acceptMode: null, editedById: null, editedAt: null, originalValue: Prisma.DbNull },
+/**
+ * Store a value unless an admin already decided it (accepted), entered it (manual) or corrected it. Under the
+ * node lock that review decisions take too, so a value is never replaced between an admin's read and accept.
+ */
+async function writeValue(nodeId: string, productId: string, definitionId: string, data: Omit<Prisma.ProductLeverValueUncheckedCreateInput, 'productId' | 'definitionId'>): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "taxonomy_nodes" WHERE id = ${nodeId} FOR UPDATE`
+    const existing = await tx.productLeverValue.findUnique({
+      where: { productId_definitionId: { productId, definitionId } },
+      select: { id: true, status: true, origin: true, editedAt: true },
     })
-  } else {
-    await prisma.productLeverValue.create({ data: { ...data, productId, definitionId } })
-  }
+    if (existing && (existing.status === ValueStatus.ACCEPTED || existing.origin === ValueOrigin.MANUAL || existing.editedAt !== null)) return
+    if (existing) {
+      await tx.productLeverValue.update({ where: { id: existing.id }, data: { ...data, reviewedById: null, reviewedAt: null, acceptMode: null } })
+    } else {
+      await tx.productLeverValue.create({ data: { ...data, productId, definitionId } })
+    }
+  })
 }
 
 const PDF_LINK = /\.pdf($|\?)/i
@@ -565,7 +584,7 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
 
   const unknownAll = async (reason: string) => {
     for (const { lever } of keyed) {
-      await writeValue(product.id, lever.definitionId, {
+      await writeValue(ctx.node.id, product.id, lever.definitionId, {
         ...EMPTY_VALUE, status: ValueStatus.PROPOSED, origin: ValueOrigin.EXTRACTED, unknownReason: reason, sourceUrl: null,
         evidenceQuote: null, statedValue: null, statedUnit: null, confidence: null, runId: ctx.runId, extractedAt: new Date(),
       })
@@ -626,13 +645,13 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
   await prisma.extractionItem.update({ where: { id: itemId }, data: { heartbeatAt: new Date() } })
 
   // Check 5: not a duplicate of a product in another node.
-  const dup = await prisma.product.findFirst({
-    where: {
-      id: { not: product.id }, nodeId: { not: ctx.node.id }, catalogStatus: { not: CatalogStatus.REJECTED },
-      OR: [{ manufacturerUrl: url }, { brand: { equals: brand, mode: 'insensitive' }, name: { equals: product.name, mode: 'insensitive' } }],
-    },
-    select: { id: true, name: true, node: { select: { name: true } } },
+  // Same URL, or the same normalized brand and name (A1), in another node.
+  const others = await prisma.product.findMany({
+    where: { id: { not: product.id }, nodeId: { not: ctx.node.id }, catalogStatus: { not: CatalogStatus.REJECTED }, OR: [{ manufacturerUrl: url }, { brand: { not: null } }] },
+    select: { id: true, name: true, brand: true, manufacturerUrl: true, node: { select: { name: true } } },
   })
+  const key = productKey(brand, product.name)
+  const dup = others.find((o) => o.manufacturerUrl === url || (o.brand !== null && productKey(o.brand, o.name) === key)) ?? null
   checks.duplicate = dup ? { pass: false, reason: `duplicate of "${dup.name}" in ${dup.node?.name ?? 'another node'}` } : { pass: true, reason: 'no duplicate in other nodes' }
 
   // The extraction call: every candidate lever from the page and manuals, plus the node-fit classification.
@@ -649,6 +668,8 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
   const r = await callModel(ctx, RunStage.EXTRACT, product.id, promptChars, 0, () => ctx.model.extract(input, ctx.config))
   const extraction = ExtractionSchema.safeParse(r.output)
   if (!extraction.success) throw new StageFailure('validation_failed', describeIssues(extraction.error))
+  // Cancelled while this item was being fetched or extracted: write nothing.
+  if (!(await isOpen(ctx.runId))) return void (await done({ error: 'cancelled' }))
 
   // Check 4: node fit, only HIGH auto-approves.
   const fit = extraction.data.nodeFit
@@ -665,7 +686,7 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
     }
     const ev = checkEvidence(lever.definition, raw, evidenceDocs)
     if (ev.ok) tally.known++; else tally.unknown++
-    await writeValue(product.id, lever.definitionId, {
+    await writeValue(ctx.node.id, product.id, lever.definitionId, {
       ...ev.columns,
       status: ValueStatus.PROPOSED,
       origin: ValueOrigin.EXTRACTED,
@@ -743,7 +764,15 @@ export async function requeueWaitingForHost(host: string): Promise<number> {
     where: { status: ItemStatus.WAITING },
     select: { id: true, runId: true, product: { select: { manufacturerUrl: true } } },
   })
-  const matching = waiting.filter((w) => w.product.manufacturerUrl && httpsHostKey(w.product.manufacturerUrl) === host)
+  const all = waiting.filter((w) => w.product.manufacturerUrl && httpsHostKey(w.product.manufacturerUrl) === host)
+  // Items of a run already published or cancelled are closed: their products wait for the node's next run.
+  const openRuns = new Set((await prisma.generationRun.findMany({
+    where: { id: { in: [...new Set(all.map((w) => w.runId))] }, status: { in: [GenerationRunStatus.ACTIVE, GenerationRunStatus.READY_FOR_REVIEW] } },
+    select: { id: true },
+  })).map((r) => r.id))
+  const closed = all.filter((w) => !openRuns.has(w.runId))
+  if (closed.length) await prisma.extractionItem.updateMany({ where: { id: { in: closed.map((c) => c.id) } }, data: { status: ItemStatus.FAILED, error: 'run closed before the brand domain was confirmed; start a new run' } })
+  const matching = all.filter((w) => openRuns.has(w.runId))
   if (!matching.length) return 0
   await prisma.extractionItem.updateMany({ where: { id: { in: matching.map((m) => m.id) } }, data: { status: ItemStatus.PENDING } })
   for (const runId of new Set(matching.map((m) => m.runId))) inBackground(runId, () => processPendingItems(runId))

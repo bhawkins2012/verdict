@@ -66,7 +66,9 @@ export type FetchResult =
 
 export interface FetcherDeps {
   transport: Transport
+  /** The clock for pauses and caches; the rate limiter uses the database clock when `dbClock` is set. */
   now: () => number
+  dbClock?: boolean
   sleep: (ms: number) => Promise<void>
   retryDelayMs: number
 }
@@ -74,6 +76,7 @@ export interface FetcherDeps {
 export const realDeps = (transport: Transport = networkTransport): FetcherDeps => ({
   transport,
   now: () => Date.now(),
+  dbClock: true,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   retryDelayMs: RETRY_DELAY_MS,
 })
@@ -116,6 +119,7 @@ export class Fetcher {
       const paused = await this.pausedUntil(host)
       if (paused) return { outcome: FetchOutcome.BLOCKED, url, host, status: null, detail: `host paused after a block until ${paused.toISOString()}` }
       const robots = await this.robots(host, url)
+      if (robots.blocked) return { outcome: FetchOutcome.BLOCKED, url, host, status: null, detail: 'robots.txt was refused (a block); not retried' }
       if (!robots.allowed) return { outcome: FetchOutcome.ROBOTS_DISALLOWED, url, host, status: null, detail: 'robots.txt disallows this URL' }
 
       const res = await this.request(host, url, accept, 1)
@@ -166,10 +170,11 @@ export class Fetcher {
   private async waitForSlot(host: string): Promise<void> {
     await this.ensureHost(host)
     const wait = await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<{ lastFetchAt: Date | null; crawlDelaySec: number | null }[]>`
-        SELECT "lastFetchAt", "crawlDelaySec" FROM "fetch_hosts" WHERE "host" = ${host} FOR UPDATE`
+      const rows = await tx.$queryRaw<{ lastFetchAt: Date | null; crawlDelaySec: number | null; dbNow: Date }[]>`
+        SELECT "lastFetchAt", "crawlDelaySec", clock_timestamp() AS "dbNow" FROM "fetch_hosts" WHERE "host" = ${host} FOR UPDATE`
       const gap = Math.max(MIN_GAP_MS, (rows[0]?.crawlDelaySec ?? 0) * 1000)
-      const now = this.deps.now()
+      // One clock for every instance (the database's), so the gap holds across processes.
+      const now = this.deps.dbClock && rows[0] ? rows[0].dbNow.getTime() : this.deps.now()
       const last = rows[0]?.lastFetchAt?.getTime() ?? null
       const next = last === null ? now : Math.max(now, last + gap)
       await tx.fetchHost.update({ where: { host }, data: { lastFetchAt: new Date(next) } })
@@ -201,13 +206,21 @@ export class Fetcher {
     }
   }
 
-  /** robots.txt for a host, cached 24 h in fetch_hosts (D6.4). */
-  private async robots(host: string, url: string): Promise<{ allowed: boolean }> {
+  /**
+   * robots.txt for a host (D6.4), read from the request's own origin (www. kept) and cached 24 h in
+   * fetch_hosts. A block on robots.txt itself (401/403/429, a challenge) pauses the host like any block.
+   */
+  private async robots(host: string, url: string): Promise<{ allowed: boolean; blocked?: boolean }> {
     await this.ensureHost(host)
     let row = await prisma.fetchHost.findUnique({ where: { host } })
     const fresh = row?.robotsFetchedAt && this.deps.now() - row.robotsFetchedAt.getTime() < ROBOTS_TTL_MS && row.robotsStatus
     if (!fresh) {
-      const { status, text } = await this.fetchRobots(host)
+      const got = await this.fetchRobots(host, new URL(url).origin)
+      if (got.status === 'blocked') {
+        await this.pause(host)
+        return { allowed: false, blocked: true }
+      }
+      const { status, text } = got
       const decided = status === 'ok' ? decideRobots(status, text, url) : null
       row = await prisma.fetchHost.update({
         where: { host },
@@ -218,14 +231,15 @@ export class Fetcher {
     return { allowed: decideRobots(status, row?.robotsTxt ?? null, url).allowed }
   }
 
-  private async fetchRobots(host: string): Promise<{ status: RobotsStatus; text: string | null }> {
-    let url = `https://${host}/robots.txt`
+  private async fetchRobots(host: string, origin: string): Promise<{ status: RobotsStatus | 'blocked'; text: string | null }> {
+    let url = `${origin}/robots.txt`
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      // Redirects stay on the same host (www. and bare count as one): robots.txt is never a way off the allow-list.
       const h = httpsHostKey(url)
-      if (!h || isDenylisted(h)) return { status: 'disallow_all', text: null }
-      await this.ensureHost(h)
+      if (!h || h !== host || isDenylisted(h)) return { status: 'disallow_all', text: null }
       const res = await this.request(h, url, [], 0)
       if ('error' in res) return { status: 'disallow_all', text: null }
+      if (res.status === 401 || res.status === 403 || res.status === 429 || res.headers.get('cf-mitigated') !== null) return { status: 'blocked', text: null }
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get('location')
         if (!loc) return { status: 'disallow_all', text: null }

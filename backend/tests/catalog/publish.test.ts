@@ -65,7 +65,7 @@ describe('publish gate', () => {
   it('needs exactly five levers and at least the minimum of approved products', async () => {
     const { t, five } = await ready(0)
     expect((await publish(t.nodeId, five.slice(0, 4))).status).toBe(400)
-    await prisma.product.updateMany({ where: { nodeId: t.nodeId }, data: { catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'fetch' } })
+    await prisma.product.updateMany({ where: { nodeId: t.nodeId }, data: { catalogStatus: CatalogStatus.NEEDS_ATTENTION, approvedVia: null, attentionCheck: 'fetch' } })
     const res = await publish(t.nodeId, five)
     expect(res.status).toBe(400)
     expect(res.body.error).toMatch(/approved products/)
@@ -95,7 +95,7 @@ describe('publish gate', () => {
 describe('atomic publish', () => {
   it('the node, its five levers in order, the listed products and a copy of their values go live together', async () => {
     const { t, five, levers, products } = await ready(0)
-    await prisma.product.update({ where: { id: products[19].id }, data: { catalogStatus: CatalogStatus.REJECTED } })
+    await prisma.product.update({ where: { id: products[19].id }, data: { catalogStatus: CatalogStatus.REJECTED, approvedVia: null } })
     const res = await publish(t.nodeId, [five[4], ...five.slice(0, 4)])
     expect(res.status).toBe(200)
     const approved = await prisma.nodeLever.findMany({ where: { nodeId: t.nodeId, status: LeverStatus.APPROVED }, orderBy: { position: 'asc' } })
@@ -133,7 +133,7 @@ describe('atomic publish', () => {
     const { t, five, levers, products } = await ready(0)
     await publish(t.nodeId, five).expect(200)
     await acceptAll(products.map((p) => p.id), [levers[5]])
-    await prisma.product.update({ where: { id: products[0].id }, data: { catalogStatus: CatalogStatus.REJECTED } })
+    await prisma.product.update({ where: { id: products[0].id }, data: { catalogStatus: CatalogStatus.REJECTED, approvedVia: null } })
     await publish(t.nodeId, [...five.slice(1), levers[5].id]).expect(200)
     expect((await prisma.nodeLever.findUniqueOrThrow({ where: { id: five[0] } })).status).toBe(LeverStatus.RETIRED)
     expect((await prisma.product.findUniqueOrThrow({ where: { id: products[0].id } })).listed).toBe(false)
@@ -184,10 +184,14 @@ describe('public side', () => {
     expect(after.body.levers[0].value.number).toBe(999)
   })
 
-  it('a discovered product that is not approved is not public', async () => {
+  it('a discovered product is not public until a publish lists it', async () => {
     const t = await testTree(); trees.push(t)
-    const [p] = await addProducts(t.nodeId, 1, { status: CatalogStatus.PROPOSED })
-    await prisma.product.update({ where: { id: p.id }, data: { catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'fetch' } })
+    const run = await prisma.generationRun.create({ data: { nodeId: t.nodeId, kind: 'NODE', mode: 'DRY_RUN', model: 'dry-run', capUsd: 10, status: 'READY_FOR_REVIEW' } })
+    const [p, auto] = await addProducts(t.nodeId, 2, { status: CatalogStatus.PROPOSED })
+    await prisma.product.update({ where: { id: p.id }, data: { catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'fetch', discoveredByRunId: run.id } })
+    // Approved automatically but not yet published: not public either (review finding 3).
+    await prisma.product.update({ where: { id: auto.id }, data: { catalogStatus: CatalogStatus.APPROVED, approvedVia: 'AUTO', discoveredByRunId: run.id } })
+    expect((await api().get(`/api/products/${auto.id}`)).status).toBe(404)
     expect((await api().get(`/api/products/${p.id}`)).status).toBe(404)
     const list = await api().get(`/api/products?q=${encodeURIComponent(p.name)}`)
     expect(list.body.products).toHaveLength(0)

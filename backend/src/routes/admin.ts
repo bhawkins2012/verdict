@@ -16,7 +16,7 @@ import { httpsHostKey } from '../generation/fetch/hosts'
 import { createLever, createLeverSchema, editLever, editLeverSchema, retireLever } from '../catalog/levers'
 import { coverage, LEVERS_PER_NODE, publishNode, publishSchema, unpublishNode } from '../catalog/publish'
 import {
-  acceptValue, approveProducts, bulkAccept, bulkAcceptSchema, editValue, enterManualValue, markUnknown, placeProduct, placeProductSchema,
+  acceptValue, approveProducts, bulkAccept, bulkAcceptSchema, decisionSchema, editValue, enterManualValue, markUnknown, placeProduct, placeProductSchema,
   productDecisionSchema, rejectProducts, rejectValue,
 } from '../catalog/review'
 import { importSurvey } from '../catalog/survey'
@@ -71,7 +71,7 @@ adminRouter.get('/nodes', async (_req: Request, res: Response) => {
   const t = await loadTaxonomy()
   const [runs, productCounts, leverCounts] = await Promise.all([
     prisma.generationRun.findMany({ orderBy: { createdAt: 'desc' }, select: { id: true, nodeId: true, status: true, kind: true, createdAt: true } }),
-    prisma.product.groupBy({ by: ['nodeId', 'catalogStatus'], _count: { _all: true } }),
+    prisma.product.groupBy({ by: ['nodeId', 'catalogStatus'], where: { NOT: { catalogStatus: CatalogStatus.APPROVED, approvedVia: null } }, _count: { _all: true } }),
     prisma.nodeLever.groupBy({ by: ['nodeId', 'status'], _count: { _all: true } }),
   ])
   const count = (rows: { nodeId: string | null; _count: { _all: number } }[], id: string, pick: (r: never) => boolean) =>
@@ -259,7 +259,10 @@ adminRouter.get('/nodes/:id/review', async (req: Request, res: Response) => {
   })
   const safetyNode = t.safetyCritical(n.id)
   const rankingFor = (name: string) => survey?.rankings.find((r) => normalizeName(r.leverName) === normalizeName(name)) ?? null
-  const approvedIds = new Set(products.filter((p) => p.catalogStatus === CatalogStatus.APPROVED).map((p) => p.id))
+  // A product added by a user is approved for its own page but not in the catalog: shown as proposed here.
+  const statusOf = (p: { catalogStatus: CatalogStatus; approvedVia: string | null }) =>
+    p.catalogStatus === CatalogStatus.APPROVED && p.approvedVia === null ? CatalogStatus.PROPOSED : p.catalogStatus
+  const approvedIds = new Set(products.filter((p) => statusOf(p) === CatalogStatus.APPROVED).map((p) => p.id))
   const reviewable = values.filter((v) => approvedIds.has(v.productId))
 
   res.json({
@@ -267,8 +270,9 @@ adminRouter.get('/nodes/:id/review', async (req: Request, res: Response) => {
     config: { minProducts: config.minProducts, mode: config.mode },
     run: run ? await presentRun(run) : null,
     products: products.map((p) => ({
-      id: p.id, name: p.name, brand: p.brand, url: p.manufacturerUrl, status: p.catalogStatus, approvedVia: p.approvedVia,
-      attentionCheck: p.attentionCheck, attentionReason: p.attentionReason, listed: p.listed, isDryRun: p.isDryRun,
+      id: p.id, name: p.name, brand: p.brand, url: p.manufacturerUrl ?? p.websiteUrl, status: statusOf(p), approvedVia: p.approvedVia,
+      attentionCheck: p.attentionCheck ?? (statusOf(p) !== p.catalogStatus ? 'added_by_user' : null),
+      attentionReason: p.attentionReason ?? (statusOf(p) !== p.catalogStatus ? 'Added by a user; approve it to include it in this node\'s list' : null), listed: p.listed, isDryRun: p.isDryRun,
       reviewedBy: p.reviewedBy?.username ?? null, item: p.extractionItems[0] ?? null,
     })),
     levers: levers.map((l) => ({
@@ -285,10 +289,10 @@ adminRouter.get('/nodes/:id/review', async (req: Request, res: Response) => {
       statedValue: v.statedValue, statedUnit: v.statedUnit, quote: v.evidenceQuote, sourceUrl: v.sourceUrl, confidence: v.confidence,
       unknownReason: v.unknownReason, adminAttested: v.adminAttested, attestedFetchOutcome: v.attestedFetchOutcome,
       edited: v.editedAt !== null, originalValue: v.originalValue, acceptMode: v.acceptMode,
-      reviewedBy: v.reviewedBy?.username ?? null, reviewedAt: v.reviewedAt, editedBy: v.editedBy?.username ?? null,
+      reviewedBy: v.reviewedBy?.username ?? null, reviewedAt: v.reviewedAt, editedBy: v.editedBy?.username ?? null, updatedAt: v.updatedAt,
     })),
     progress: {
-      products: Object.fromEntries(Object.values(CatalogStatus).map((s) => [s, products.filter((p) => p.catalogStatus === s).length])),
+      products: Object.fromEntries(Object.values(CatalogStatus).map((s) => [s, products.filter((p) => statusOf(p) === s).length])),
       values: { reviewed: reviewable.filter((v) => v.status !== 'PROPOSED').length, total: reviewable.length },
     },
   })
@@ -325,15 +329,15 @@ adminRouter.post('/products/:id/values', async (req: Request, res: Response) => 
 
 // ── Values ──────────────────────────────────────────────────────────────────────────────────────────
 adminRouter.post('/values/:id/accept', async (req: Request, res: Response) => {
-  const v = await acceptValue(req.params.id, userId(req))
+  const v = await acceptValue(req.params.id, userId(req), parse(decisionSchema, req.body ?? {}).seen)
   res.json({ id: v.id, status: v.status })
 })
 adminRouter.post('/values/:id/reject', async (req: Request, res: Response) => {
-  const v = await rejectValue(req.params.id, userId(req))
+  const v = await rejectValue(req.params.id, userId(req), parse(decisionSchema, req.body ?? {}).seen)
   res.json({ id: v.id, status: v.status })
 })
 adminRouter.post('/values/:id/unknown', async (req: Request, res: Response) => {
-  const v = await markUnknown(req.params.id, userId(req))
+  const v = await markUnknown(req.params.id, userId(req), parse(decisionSchema, req.body ?? {}).seen)
   res.json({ id: v.id, status: v.status })
 })
 adminRouter.patch('/values/:id', async (req: Request, res: Response) => {
@@ -380,6 +384,7 @@ adminRouter.post('/brands/:id/confirm', async (req: Request, res: Response) => {
 })
 
 adminRouter.post('/brands/:id/reject', async (req: Request, res: Response) => {
+  if (!(await prisma.brandDomain.findUnique({ where: { id: req.params.id }, select: { id: true } }))) throw new AppError(404, 'Not found')
   const b = await prisma.brandDomain.update({ where: { id: req.params.id }, data: { status: BrandDomainStatus.REJECTED, verifiedVia: null, verifiedAt: null, verifiedById: userId(req) } })
   const waiting = await prisma.extractionItem.findMany({ where: { status: ItemStatus.WAITING }, select: { id: true, productId: true, product: { select: { manufacturerUrl: true } } } })
   const affected = waiting.filter((w) => w.product.manufacturerUrl && httpsHostKey(w.product.manufacturerUrl) === b.host)

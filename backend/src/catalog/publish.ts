@@ -3,13 +3,14 @@
 // accepted values go live together, or nothing changes. Public reads use only what this writes.
 import { z } from 'zod'
 import {
-  CatalogStatus, GenerationRunStatus, ItemStatus, LeverStatus, LeverType, NodeKind, Prisma, StageStatus, ValueOrigin, ValueStatus,
+  GenerationRunStatus, ItemStatus, LeverStatus, LeverType, NodeKind, Prisma, StageStatus, ValueOrigin, ValueStatus,
 } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { AppError } from '../middleware/errorHandler'
 import { isDevEnvironment } from '../middleware/devOnly'
 import { loadGenerationConfig } from '../generation/config'
 import { lockNode } from './taxonomy'
+import { IN_CATALOG } from './products'
 
 export const LEVERS_PER_NODE = 5
 /** Gate: accepted known values ≥ 80% of the node's published products (accepted × 5 ≥ products × 4). */
@@ -24,7 +25,7 @@ export interface LeverCoverage { found: number; accepted: number; products: numb
  * and values accepted (known). An accepted "unknown" does not count (ADR Q9). Phase A values never count.
  */
 export async function coverage(db: Db, nodeId: string): Promise<{ products: number; byDefinition: Map<string, LeverCoverage> }> {
-  const products = await db.product.findMany({ where: { nodeId, catalogStatus: CatalogStatus.APPROVED }, select: { id: true } })
+  const products = await db.product.findMany({ where: { nodeId, ...IN_CATALOG }, select: { id: true } })
   const ids = products.map((p) => p.id)
   const rows = ids.length
     ? await db.productLeverValue.groupBy({
@@ -67,7 +68,9 @@ export async function publishNode(nodeId: string, leverIds: string[], userId: st
         nodeId, OR: [
           { status: GenerationRunStatus.ACTIVE },
           { stages: { some: { status: StageStatus.RUNNING } } },
-          { items: { some: { status: { in: [ItemStatus.PENDING, ItemStatus.RUNNING] } } } },
+          { items: { some: { status: ItemStatus.RUNNING } } },
+          // Pending items of a run still under review are about to be processed; a closed run's are not.
+          { status: GenerationRunStatus.READY_FOR_REVIEW, items: { some: { status: ItemStatus.PENDING } } },
         ],
       },
       select: { id: true },
@@ -80,7 +83,7 @@ export async function publishNode(nodeId: string, leverIds: string[], userId: st
     const badCategory = chosen.find((l) => l.definition.type === LeverType.CATEGORY && l.definition.allowedValues.length < 2)
     if (badCategory) throw new AppError(400, `"${badCategory.definition.name}" needs at least two allowed values before it can be published`)
 
-    const products = await tx.product.findMany({ where: { nodeId, catalogStatus: CatalogStatus.APPROVED }, select: { id: true, isDryRun: true } })
+    const products = await tx.product.findMany({ where: { nodeId, ...IN_CATALOG }, select: { id: true, isDryRun: true } })
     if (products.length < minProducts) {
       throw new AppError(400, `At least ${minProducts} approved products are needed to publish (${products.length} now)`)
     }

@@ -6,12 +6,18 @@ export function hostKey(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/\.$/, '').replace(/^www\./, '')
 }
 
-/** hostKey of a URL's host, or null for anything that is not an https URL. */
+/**
+ * hostKey of a URL's host, or null for anything that is not a public https URL: no credentials, the default
+ * port only, no IP literals, no localhost, no single-label or internal names.
+ */
 export function httpsHostKey(url: string): string | null {
   try {
     const u = new URL(url)
-    if (u.protocol !== 'https:' || !u.hostname || u.username || u.password) return null
-    return hostKey(u.hostname)
+    if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port !== '') return null
+    const h = u.hostname.toLowerCase().replace(/\.$/, '')
+    if (/^\d+(\.\d+){3}$/.test(h) || h.startsWith('[') || h.includes(':')) return null
+    if (!h.includes('.') || h === 'localhost' || /\.(localhost|local|internal|lan|home|corp|intranet)$/.test(h)) return null
+    return hostKey(h)
   } catch {
     return null
   }

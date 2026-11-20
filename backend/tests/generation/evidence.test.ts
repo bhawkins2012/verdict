@@ -106,6 +106,13 @@ describe('unknown is never guessed', () => {
   it('the stated unit must be in the quote', () => {
     expect(checkEvidence(lb, raw({ statedValue: '35', statedUnit: 'kg', quote: 'Maximum child weight: 35 lb' }), docs)).toMatchObject({ ok: false, reason: 'unit_not_in_quote' })
   })
+
+  it('the unit must follow the number it measures, not appear elsewhere in the quote', () => {
+    const d = [{ key: 'page', url: 'https://acme.example/glide', text: 'Carrier: 9.1 kg; fits babies up to 22 lb' }]
+    expect(checkEvidence(lb, raw({ statedValue: '22', statedUnit: 'kg', quote: 'Carrier: 9.1 kg; fits babies up to 22 lb' }), d)).toMatchObject({ ok: false, reason: 'unit_not_in_quote' })
+    expect(checkEvidence(lb, raw({ statedValue: '22', statedUnit: 'lb', quote: 'Carrier: 9.1 kg; fits babies up to 22 lb' }), d).ok).toBe(true)
+    expect(checkEvidence(lb, raw({ statedValue: '9.1', statedUnit: 'kg', quote: 'Carrier: 9.1 kg; fits babies up to 22 lb' }), d).ok).toBe(true)
+  })
 })
 
 describe('unit conversion', () => {

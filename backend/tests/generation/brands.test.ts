@@ -24,12 +24,14 @@ describe('automatic brand verification', () => {
     const id = uid()
     const host = `lullacarry${id}.example`
     const web = site(`LullaCarry${id}`, host, `LullaCarry${id}`)
+    web.set(`https://www.${host}/robots.txt`, { type: 'text/plain', body: 'User-agent: *\nAllow: /\n' })
+    web.page(`https://www.${host}/`, homePage(`LullaCarry${id}`))
     const r = await verifyBrandHost(`LullaCarry${id}`, `https://www.${host}/products/glide`, web.fetcher())
     expect(r).toEqual({ status: 'verified', host })
     const row = await prisma.brandDomain.findUniqueOrThrow({ where: { host } })
     expect(row).toMatchObject({ status: BrandDomainStatus.VERIFIED, verifiedVia: 'AUTOMATIC' })
-    // Only robots.txt and the home page were requested.
-    expect(web.urls()).toEqual([`https://${host}/robots.txt`, `https://${host}/`])
+    // Only robots.txt and the home page were requested, from the origin the product URL names (www. kept).
+    expect(web.urls()).toEqual([`https://www.${host}/robots.txt`, `https://www.${host}/`])
   })
 
   it('a lookalike domain (brand in the name, another site name) waits for an admin', async () => {

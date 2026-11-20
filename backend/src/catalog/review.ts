@@ -9,27 +9,38 @@ import {
 import { prisma } from '../lib/prisma'
 import { AppError } from '../middleware/errorHandler'
 import { lockNode, loadTaxonomy } from './taxonomy'
+import { IN_CATALOG } from './products'
+import { httpsHostKey, isDenylisted } from '../generation/fetch/hosts'
 import { brandKey, quoteAppearsIn } from './text'
 import { EMPTY_VALUE, presentTyped, toValueData, valueColumnsOf, valueInputSchema } from './values'
 import { isVerifiedFor } from '../generation/brands'
 import { loadGenerationConfig } from '../generation/config'
 import { fetcherFor } from '../generation/fetch/fetcher'
-import { parseHtml } from '../generation/fetch/html'
+import { looksLikeChallenge, parseHtml } from '../generation/fetch/html'
 import { extractPdfText } from '../generation/fetch/pdf'
 import { fixtureTransport } from '../generation/fixtures/site'
 import { MAX_QUOTE_CHARS } from '../generation/evidence'
 
 type Tx = Prisma.TransactionClient
 
-/** Lock the value's node, then read the value again inside the lock. */
-async function lockValue(tx: Tx, valueId: string) {
+/**
+ * Lock the value's node, then read the value again inside the lock. `seen` is the value's updatedAt as the
+ * admin's screen showed it: if it changed since (a re-extraction, another admin), the decision is refused.
+ */
+async function lockValue(tx: Tx, valueId: string, seen?: string) {
   const ref = await tx.productLeverValue.findUnique({ where: { id: valueId }, select: { product: { select: { nodeId: true } } } })
   if (!ref) throw new AppError(404, 'Value not found')
   if (ref.product.nodeId) await lockNode(tx, ref.product.nodeId)
   const v = await tx.productLeverValue.findUnique({ where: { id: valueId }, include: { definition: true, product: { select: { nodeId: true } } } })
   if (!v) throw new AppError(404, 'Value not found')
+  if (seen !== undefined && v.updatedAt.toISOString() !== seen) {
+    throw new AppError(409, 'This value changed since you opened it (new evidence or another admin): look at it again')
+  }
   return v
 }
+
+/** Optional body of a review decision: the value's updatedAt as the admin saw it. */
+export const decisionSchema = z.object({ seen: z.string().datetime().optional() }).strict()
 
 /** Is this value on a safety-flagged lever (the definition, the node lever, or a safety-critical node)? */
 export async function isSafetyValue(tx: Tx, definitionId: string, nodeId: string | null): Promise<boolean> {
@@ -41,9 +52,9 @@ export async function isSafetyValue(tx: Tx, definitionId: string, nodeId: string
   return (await loadTaxonomy(tx)).safetyCritical(nodeId)
 }
 
-export async function acceptValue(valueId: string, userId: string) {
+export async function acceptValue(valueId: string, userId: string, seen?: string) {
   return prisma.$transaction(async (tx) => {
-    const v = await lockValue(tx, valueId)
+    const v = await lockValue(tx, valueId, seen)
     if (v.origin === ValueOrigin.PHASE_A) throw new AppError(400, 'This Phase A value has no evidence quote and cannot be accepted; extract it again or enter a value with its source')
     if (!v.isUnknown && (!v.evidenceQuote || !v.sourceUrl)) throw new AppError(400, 'A value needs its evidence quote and source before it can be accepted')
     return tx.productLeverValue.update({
@@ -53,9 +64,9 @@ export async function acceptValue(valueId: string, userId: string) {
   })
 }
 
-export async function rejectValue(valueId: string, userId: string) {
+export async function rejectValue(valueId: string, userId: string, seen?: string) {
   return prisma.$transaction(async (tx) => {
-    await lockValue(tx, valueId)
+    await lockValue(tx, valueId, seen)
     return tx.productLeverValue.update({
       where: { id: valueId },
       data: { status: ValueStatus.REJECTED, acceptMode: null, reviewedById: userId, reviewedAt: new Date() },
@@ -64,9 +75,9 @@ export async function rejectValue(valueId: string, userId: string) {
 }
 
 /** Record an explicit unknown (accepted, so the product shows "Unknown"; it does not count toward coverage). */
-export async function markUnknown(valueId: string, userId: string) {
+export async function markUnknown(valueId: string, userId: string, seen?: string) {
   return prisma.$transaction(async (tx) => {
-    const v = await lockValue(tx, valueId)
+    const v = await lockValue(tx, valueId, seen)
     const now = new Date()
     return tx.productLeverValue.update({
       where: { id: valueId },
@@ -116,7 +127,7 @@ export async function bulkAccept(nodeId: string, definitionId: string, userId: s
       where: {
         definitionId, status: ValueStatus.PROPOSED, origin: ValueOrigin.EXTRACTED, confidence: Confidence.HIGH, isUnknown: false,
         editedAt: null, evidenceQuote: { not: null }, sourceUrl: { not: null },
-        product: { nodeId, catalogStatus: CatalogStatus.APPROVED },
+        product: { nodeId, ...IN_CATALOG },
       },
       data: { status: ValueStatus.ACCEPTED, acceptMode: AcceptMode.BULK, reviewedById: userId, reviewedAt: new Date() },
     })
@@ -168,11 +179,17 @@ export async function enterManualValue(productId: string, rawInput: unknown, use
   const res = await fetcher.fetch(input.sourceUrl, { kind: 'brand', brandKey: brandKey(product.brand) }, ['html', 'pdf'])
   let attested: FetchOutcome | null = null
   if (res.outcome === FetchOutcome.OK) {
-    const text = res.kind === 'pdf'
-      ? await extractPdfText(res.body).then((r) => (r.ok ? r.text : null))
-      : parseHtml(new TextDecoder().decode(res.body), res.url).text
-    if (text === null) throw new AppError(400, 'The source PDF has no readable text, so the quote cannot be checked')
-    if (!quoteAppearsIn(text, input.quote)) throw new AppError(400, 'The quote is not on the source page (checked against a fresh fetch, ignoring spacing)')
+    const html = res.kind === 'html' ? new TextDecoder().decode(res.body) : null
+    const page = html !== null ? parseHtml(html, res.url) : null
+    if (page && html !== null && looksLikeChallenge(page, html)) {
+      // A bot challenge is a block: pause the host and record the value as admin-attested.
+      await fetcher.pause(res.host)
+      attested = FetchOutcome.BLOCKED
+    } else {
+      const text = page ? page.text : await extractPdfText(res.body).then((r) => (r.ok ? r.text : null))
+      if (text === null) throw new AppError(400, 'The source PDF has no readable text, so the quote cannot be checked')
+      if (!quoteAppearsIn(text, input.quote)) throw new AppError(400, 'The quote is not on the source page (checked against a fresh fetch, ignoring spacing)')
+    }
   } else if (BLOCKED_OUTCOMES.includes(res.outcome)) {
     attested = res.outcome
   } else {
@@ -199,10 +216,25 @@ export async function enterManualValue(productId: string, rawInput: unknown, use
 // ── Products: exceptions only (approval is automatic) ───────────────────────────────────────────────
 export const productDecisionSchema = z.object({ productIds: z.array(z.string().min(1).max(64)).min(1).max(100) }).strict()
 
-/** Approve needs-attention products by hand (or put a rejected one back). */
+/**
+ * Approve products by hand into their node's catalog: needs-attention products, rejected ones, and products
+ * added by users. A product whose URL is a retailer or review site is refused (values come only from brands).
+ */
 export async function approveProducts(productIds: string[], userId: string) {
+  const candidates = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { name: true, manufacturerUrl: true, websiteUrl: true } })
+  const retailer = candidates.find((p) => [p.manufacturerUrl, p.websiteUrl].some((u) => {
+    const host = u ? httpsHostKey(u) : null
+    return host !== null && isDenylisted(host)
+  }))
+  if (retailer) throw new AppError(400, `"${retailer.name}" links to a retailer or review site; find the manufacturer's page first`)
   const { count } = await prisma.product.updateMany({
-    where: { id: { in: productIds }, nodeId: { not: null }, catalogStatus: { in: [CatalogStatus.NEEDS_ATTENTION, CatalogStatus.PROPOSED, CatalogStatus.REJECTED] } },
+    where: {
+      id: { in: productIds }, nodeId: { not: null },
+      OR: [
+        { catalogStatus: { in: [CatalogStatus.NEEDS_ATTENTION, CatalogStatus.PROPOSED, CatalogStatus.REJECTED] } },
+        { catalogStatus: CatalogStatus.APPROVED, approvedVia: null },
+      ],
+    },
     data: { catalogStatus: CatalogStatus.APPROVED, approvedVia: 'ADMIN', attentionCheck: null, attentionReason: null, reviewedById: userId, reviewedAt: new Date() },
   })
   return { approved: count }
@@ -211,7 +243,7 @@ export async function approveProducts(productIds: string[], userId: string) {
 /** Remove products from the node. A product already listed stays listed until the next publish (like every change). */
 export async function rejectProducts(productIds: string[], userId: string) {
   const { count } = await prisma.product.updateMany({
-    where: { id: { in: productIds }, discoveredByRunId: { not: null } },
+    where: { id: { in: productIds }, nodeId: { not: null } },
     data: { catalogStatus: CatalogStatus.REJECTED, approvedVia: null, attentionCheck: null, attentionReason: null, reviewedById: userId, reviewedAt: new Date() },
   })
   return { rejected: count }
@@ -235,9 +267,11 @@ export async function placeProduct(productId: string, input: z.infer<typeof plac
     const product = await tx.product.findUnique({ where: { id: productId }, select: { nodeId: true } })
     if (!product) throw new AppError(404, 'Product not found')
     const nodeId = input.nodeId ?? product.nodeId
-    if (input.nodeId) {
+    if (input.nodeId && input.nodeId !== product.nodeId) {
       const slug = t.byId.get(input.nodeId)?.slug
       await tx.product.update({ where: { id: productId }, data: { nodeId: input.nodeId, category: slug, listed: false } })
+      // Its old node's public copy goes with it (ranges, medians, and the unique row per product and lever).
+      await tx.publishedLeverValue.deleteMany({ where: { productId } })
     }
     if (input.alsoListedIn) {
       if (nodeId && input.alsoListedIn.includes(nodeId)) throw new AppError(400, 'A product is not "also listed in" its own node')

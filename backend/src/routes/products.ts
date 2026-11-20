@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
 import { NodeKind } from '@prisma/client'
 import { productLevers } from '../catalog/public'
+import { publicProductWhere } from '../catalog/products'
 
 export const productsRouter = Router()
 
@@ -32,7 +33,7 @@ productsRouter.get('/', async (req: Request, res: Response) => {
   const skip = (parseInt(page) - 1) * parseInt(limit)
 
   // Discovered products appear only once approved (docs/adr-generation-run.md D2).
-  const where: Prisma.ProductWhereInput = { catalogStatus: 'APPROVED' }
+  const where: Prisma.ProductWhereInput = { AND: [publicProductWhere()] }
   if (q) {
     where.OR = [
       { name: { contains: q, mode: 'insensitive' } },
@@ -66,15 +67,15 @@ productsRouter.get('/', async (req: Request, res: Response) => {
 
 // GET /api/products/:id
 productsRouter.get('/:id', async (req: Request, res: Response) => {
-  const product = await prisma.product.findUnique({
-    where: { id: req.params.id },
+  const product = await prisma.product.findFirst({
+    where: { id: req.params.id, ...publicProductWhere() },
     include: {
       _count: { select: { reviewThreads: true, aggregatedReviews: true } },
       node: { select: { slug: true, name: true, publishedAt: true } },
     }
   })
-  // Discovered products are public only once approved (docs/adr-generation-run.md D2).
-  if (!product || product.catalogStatus === 'PROPOSED' || product.catalogStatus === 'NEEDS_ATTENTION' || product.catalogStatus === 'REJECTED') {
+  // Discovered products are public only once a publish lists them (docs/adr-generation-run.md D10).
+  if (!product) {
     throw new AppError(404, 'Product not found')
   }
   // The five published levers of its node with this product's published values and evidence (ADR D12).

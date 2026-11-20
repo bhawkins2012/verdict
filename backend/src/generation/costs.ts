@@ -83,9 +83,12 @@ export async function reserveCall(args: {
   }, { timeout: 15_000 })
 }
 
-/** Record what a call actually used. A failed call that was billed still records its usage. */
+/**
+ * Record what a call actually used. Without usage (an API error or a timeout, which may still have been
+ * billed, retries included) the cost stays null, so the reservation keeps counting against the caps.
+ */
 export async function settleCall(callId: string, model: string, servedModel: string | null, usage: Usage | null, error: string | null): Promise<number | null> {
-  const cost = usage ? (servedModel ? costUsd(servedModel, usage) : null) ?? costUsd(model, usage) : 0
+  const cost = usage ? (servedModel ? costUsd(servedModel, usage) : null) ?? costUsd(model, usage) : error ? null : 0
   if (usage && cost === null) logger.warn('No price for model; call cost not recorded', { callId, model: servedModel ?? model })
   await prisma.generationCall.update({
     where: { id: callId },

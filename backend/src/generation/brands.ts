@@ -60,7 +60,8 @@ export async function verifyBrandHost(brand: string, url: string, fetcher: Fetch
   if (!check.labelContainsBrand) {
     check.failed = `the domain name ${host} does not contain the brand name`
   } else {
-    const home = await fetcher.fetch(`https://${host}/`, { kind: 'homepage', host }, ['html'])
+    // The home page of the host the product URL names (www. kept: some brands serve only www).
+    const home = await fetcher.fetch(`${new URL(url).origin}/`, { kind: 'homepage', host }, ['html'])
     check.homepage = home.outcome
     if (home.outcome !== FetchOutcome.OK) {
       check.failed = `the home page could not be fetched (${home.outcome}: ${home.detail})`

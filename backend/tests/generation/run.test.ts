@@ -6,7 +6,8 @@ import {
 } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
 import { flushGenerationRuns, reconcileGeneration, STALE_MS } from '../../src/generation/runs'
-import { CapError, reserveCall } from '../../src/generation/costs'
+import { CapError, reserveCall, runSpendUsd, worstCaseUsd } from '../../src/generation/costs'
+import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES } from '../../src/generation/model'
 import { setTransactionalProviderForTests } from '../../src/auth/mailer'
 import { makeTextPdf } from '../../src/generation/fixtures/pdf'
 import { api, bearer, cleanup } from '../helpers'
@@ -148,7 +149,9 @@ describe('a run end to end', () => {
     expect(by('Unlikely')).toMatchObject({ catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'nodeFit' })
     expect(by('Twin')).toMatchObject({ catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'duplicate' })
     expect(by('Bloom')).toMatchObject({ catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'brand_domain' })
-    expect(by('Basics')).toMatchObject({ catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'brand_domain' })
+    // A retailer URL is dropped at discovery: no product row at all.
+    expect(by('Basics')).toBeUndefined()
+    expect(r.stages.find((x) => x.stage === RunStage.DISCOVER)?.output).toMatchObject({ droppedRetailers: 1 })
     expect(by('Gone')).toMatchObject({ catalogStatus: CatalogStatus.NEEDS_ATTENTION, attentionCheck: 'fetch' })
     expect(by('Gone')?.attentionReason).toMatch(/BLOCKED/)
     expect(ps.filter((p) => p.catalogStatus === CatalogStatus.APPROVED)).toHaveLength(10)
@@ -236,6 +239,24 @@ describe('a run end to end', () => {
     expect(after).toMatchObject({ status: ValueStatus.ACCEPTED, valueNumber: v.valueNumber })
     const others = await prisma.productLeverValue.findMany({ where: { definitionId: lever.definitionId, id: { not: v.id }, product: { nodeId: tree.nodeId } } })
     expect(others.every((o) => o.valueNumber === 99)).toBe(true)
+  })
+
+  it('a re-extraction never overwrites a value an admin corrected (still proposed)', async () => {
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    const w = web(s); model(s)
+    const r1 = await run(tree)
+    const lever = await prisma.nodeLever.findFirstOrThrow({ where: { nodeId: tree.nodeId }, orderBy: { createdAt: 'asc' } })
+    const v = await prisma.productLeverValue.findFirstOrThrow({ where: { runId: r1.id, definitionId: lever.definitionId } })
+    await api().patch(`/api/admin/values/${v.id}`).set(bearer(admin.accessToken)).send({ number: 42 }).expect(200)
+    await api().post(`/api/admin/runs/${r1.id}/cancel`).set(bearer(admin.accessToken))
+    for (const x of s) w.page(url(x), productPage(`${x.brand} ${x.model}`, ['Weight: 99 lb']))
+    model(s)
+    await run(tree)
+    const after = await prisma.productLeverValue.findUniqueOrThrow({ where: { id: v.id } })
+    expect(after.status).toBe(ValueStatus.PROPOSED)
+    expect(Number(after.valueNumber)).toBe(42)
+    expect(after.editedAt).not.toBeNull()
   })
 })
 
@@ -346,6 +367,44 @@ describe('caps, resume and stuck stages', () => {
     expect(await prisma.generationRun.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({ status: GenerationRunStatus.STALLED, error: 'EXTRACT: stalled' })
     expect(await prisma.generationRunStage.findFirstOrThrow({ where: { runId: r.id } })).toMatchObject({ status: StageStatus.STALLED })
     expect(await prisma.extractionItem.findFirstOrThrow({ where: { runId: r.id } })).toMatchObject({ status: ItemStatus.PENDING })
+  })
+
+  it('discovery reserves the worst case of every request it may make (pause_turn resumes included)', async () => {
+    liveMode({ GENERATION_RUN_CAP_USD: '1000', GENERATION_DAILY_CAP_USD: '10000' })
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    web(s); model(s)
+    const r = await run(tree)
+    const call = await prisma.generationCall.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.DISCOVER } })
+    const one = worstCaseUsd('claude-opus-5-5', 4_000, Number(process.env.GENERATION_MAX_TOKENS ?? 16000), DISCOVERY_MAX_SEARCHES, DISCOVERY_MAX_SEARCHES * 10_000)
+    expect(Number(call.reservedUsd)).toBeCloseTo((one ?? 0) * (MAX_PAUSE_RESUMES + 1), 4)
+  })
+
+  it('a live call that fails without usage keeps counting its reservation (cost stays null, not 0)', async () => {
+    liveMode({ GENERATION_RUN_CAP_USD: '1000', GENERATION_DAILY_CAP_USD: '10000' })
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    web(s)
+    const m = model(s)
+    m.answers.place = () => { throw new Error('boom') }
+    const r = await run(tree)
+    const call = await prisma.generationCall.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.PLACE } })
+    expect(call.costUsd).toBeNull()
+    expect(Number(call.reservedUsd)).toBeGreaterThan(0)
+    expect(await runSpendUsd(r.id)).toBeCloseTo(Number(call.reservedUsd), 6)
+  })
+
+  it('resume puts back only items whose worker stopped; a live item is not run twice', async () => {
+    const tree = await testTree(); trees.push(tree)
+    const r = await prisma.generationRun.create({ data: { nodeId: tree.nodeId, kind: 'NODE', mode: 'DRY_RUN', model: 'dry-run', capUsd: 10, status: 'READY_FOR_REVIEW' } })
+    const [a, b] = await Promise.all(['Live', 'Stopped'].map((name) => prisma.product.create({ data: { name: `${name} ${uid()}`, category: 'x', nodeId: tree.nodeId } })))
+    const live = await prisma.extractionItem.create({ data: { runId: r.id, productId: a.id, status: ItemStatus.RUNNING, heartbeatAt: new Date() } })
+    const stopped = await prisma.extractionItem.create({ data: { runId: r.id, productId: b.id, status: ItemStatus.RUNNING, heartbeatAt: new Date(Date.now() - STALE_MS - 60_000) } })
+    expect((await api().post(`/api/admin/runs/${r.id}/resume`).set(bearer(admin.accessToken))).status).toBe(202)
+    await flushGenerationRuns()
+    expect(await prisma.extractionItem.findUniqueOrThrow({ where: { id: live.id } })).toMatchObject({ status: ItemStatus.RUNNING, attempts: live.attempts })
+    expect(await prisma.extractionItem.findUniqueOrThrow({ where: { id: stopped.id } })).toMatchObject({ status: ItemStatus.DONE, attempts: stopped.attempts + 1 })
+    await prisma.extractionItem.deleteMany({ where: { runId: r.id } })
   })
 
   it('one open run per node', async () => {

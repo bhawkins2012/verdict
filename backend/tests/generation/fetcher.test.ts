@@ -204,3 +204,40 @@ describe('rate limit and request rules', () => {
     expect((await fetcher.fetch(`https://${host}/p`, brand, ['html'])).outcome).toBe(FetchOutcome.UNSUPPORTED_TYPE)
   })
 })
+
+describe('review findings: robots.txt and hosts', () => {
+  it('a robots.txt redirect off the host is not followed, and the host is treated as disallowing all', async () => {
+    const { host, web, fetcher, ready } = setup()
+    await ready
+    web.set(`https://${host}/robots.txt`, { status: 301, headers: { location: 'https://elsewhere.example/robots.txt' } })
+    expect((await fetcher.fetch(`https://${host}/p`, brand, ['html'])).outcome).toBe(FetchOutcome.ROBOTS_DISALLOWED)
+    expect(web.urls().some((u) => u.includes('elsewhere.example'))).toBe(false)
+  })
+
+  it.each([401, 403, 429])('robots.txt answering %i is a block: BLOCKED, the page is not requested and the host is paused', async (status) => {
+    const { host, web, fetcher, ready } = setup()
+    await ready
+    web.set(`https://${host}/robots.txt`, { status, type: 'text/plain', body: '' })
+    expect((await fetcher.fetch(`https://${host}/p`, brand, ['html'])).outcome).toBe(FetchOutcome.BLOCKED)
+    expect(web.urls()).toEqual([`https://${host}/robots.txt`])
+    expect((await prisma.fetchHost.findUniqueOrThrow({ where: { host } })).blockedUntil?.getTime()).toBe(web.clock + BLOCK_PAUSE_MS)
+  })
+
+  it('robots.txt is read from the origin the URL names (a www-only site)', async () => {
+    const { host, web, fetcher, ready } = setup()
+    await ready
+    web.set(`https://${host}/robots.txt`, { status: -1 })
+    web.set(`https://www.${host}/robots.txt`, { type: 'text/plain', body: 'User-agent: *\nAllow: /\n' })
+    web.page(`https://www.${host}/p`, '<html><body>ok</body></html>')
+    expect((await fetcher.fetch(`https://www.${host}/p`, brand, ['html'])).outcome).toBe(FetchOutcome.OK)
+    expect(web.urls()[0]).toBe(`https://www.${host}/robots.txt`)
+  })
+
+  it.each([
+    'https://127.0.0.1/p', 'https://[::1]/p', 'https://localhost/p', 'https://intranet/p', 'https://build.internal/p', 'https://acme.example:8443/p',
+  ])('%s is never requested', async (url) => {
+    const web = new FakeWeb()
+    expect((await web.fetcher().fetch(url, { kind: 'linked', brandKey: 'acme', urls: new Set([url]) }, ['html'])).outcome).toBe(FetchOutcome.NOT_ALLOWED)
+    expect(web.requests).toHaveLength(0)
+  })
+})

@@ -72,7 +72,10 @@ export async function addProducts(nodeId: string, n: number, opts: { status?: Ca
   const out = []
   for (let i = 0; i < n; i++) {
     out.push(await prisma.product.create({
-      data: { name: `Model ${i + 1} ${uid()}`, brand: opts.brand ?? 'Testbrand', category: slug, nodeId, catalogStatus: opts.status ?? CatalogStatus.APPROVED, isDryRun: !!opts.dryRun },
+      data: {
+        name: `Model ${i + 1} ${uid()}`, brand: opts.brand ?? 'Testbrand', category: slug, nodeId, catalogStatus: opts.status ?? CatalogStatus.APPROVED,
+        approvedVia: (opts.status ?? CatalogStatus.APPROVED) === CatalogStatus.APPROVED ? 'AUTO' : null, isDryRun: !!opts.dryRun,
+      },
     }))
   }
   return out

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { Prisma, ReviewStage, ReviewSource } from '@prisma/client'
+import { publicProductWhere } from '../catalog/products'
 import { prisma } from '../lib/prisma'
 import { authenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
@@ -79,7 +80,8 @@ reviewsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   const userId = req.userId!
 
   // Verify product exists
-  const product = await prisma.product.findUnique({ where: { id: productId } })
+  // Only products a user can see can be reviewed (discovered products only once listed).
+  const product = await prisma.product.findFirst({ where: { id: productId, ...publicProductWhere() } })
   if (!product) throw new AppError(404, 'Product not found')
 
   // Upsert the thread

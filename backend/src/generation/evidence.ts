@@ -59,6 +59,18 @@ function unitInQuote(statedUnit: string | null, quote: string): boolean {
   })
 }
 
+/**
+ * Does the quote state this number with this unit right after it ("4.3 kg", "4.3kg", "32 in", "21\")?
+ * Ties the unit to the number, so "9.1 kg; up to 22 lb" never reads as 22 kg.
+ */
+export function numberWithUnit(stated: string, statedUnit: string | null, quote: string): boolean {
+  const spellings = spellingsFor(statedUnit).filter((s) => s.length > 0).sort((a, b) => b.length - a.length)
+  if (spellings.length === 0) return false
+  const q = normalizeEvidence(quote).toLowerCase()
+  const units = spellings.map((s) => escapeRe(s.toLowerCase())).join('|')
+  return new RegExp(`(?<![\\d.,])${escapeRe(stated.trim())}\\s?(?:${units})(?![a-z])`).test(q)
+}
+
 const NEGATION = /\b(no|not|none|without|n\/a|non)\b|\bnon-/i
 
 export function checkEvidence(def: DefinitionForEvidence, raw: ExtractedValue, docs: readonly EvidenceDocument[]): EvidenceResult {
@@ -95,7 +107,7 @@ export function checkEvidence(def: DefinitionForEvidence, raw: ExtractedValue, d
         if (parts.some((p) => !numberInQuote(p, quote))) return fail('number_not_in_quote')
         const inches = nums.map((n) => toCanonical(n ?? NaN, raw.statedUnit, 'in'))
         if (inches.some((c) => c === null)) return fail('unit_unknown')
-        if (!unitInQuote(raw.statedUnit, quote)) return fail('unit_not_in_quote')
+        if (!parts.some((p) => numberWithUnit(p, raw.statedUnit, quote))) return fail('unit_not_in_quote')
         const [l, w, h] = inches.map((c) => c?.value ?? 0)
         if (inches.some((c) => c?.converted)) confidence = lower(confidence, Confidence.MEDIUM)
         const oneHand = raw.oneHandFold === true && /one[- ]hand/i.test(quote) ? true : null
@@ -107,7 +119,7 @@ export function checkEvidence(def: DefinitionForEvidence, raw: ExtractedValue, d
       if (!numberInQuote(stated, quote)) return fail('number_not_in_quote')
       const conv = toCanonical(n, raw.statedUnit, def.unit)
       if (!conv) return fail('unit_unknown')
-      if (def.unit !== 'count' && !unitInQuote(raw.statedUnit, quote)) return fail('unit_not_in_quote')
+      if (def.unit !== 'count' && !numberWithUnit(stated, raw.statedUnit, quote)) return fail('unit_not_in_quote')
       if (conv.converted && !unitInQuote(def.unit, quote)) confidence = lower(confidence, Confidence.MEDIUM)
       if ((def.minValue !== null && conv.value < def.minValue) || (def.maxValue !== null && conv.value > def.maxValue)) {
         confidence = Confidence.LOW
