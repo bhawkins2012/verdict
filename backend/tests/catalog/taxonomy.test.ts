@@ -32,6 +32,16 @@ describe('no cycles', () => {
     expect(res.body.error).toMatch(/cycle/)
   })
 
+  it('a cycle that closes only through an "also listed in" edge is refused by the API', async () => {
+    const a = await tree()
+    const b = await tree()
+    // a's nav is also listed under b's root; putting b's root under a's nav closes a loop through that edge.
+    await patch(a.navId, { secondaryParentIds: [b.rootId] }).expect(200)
+    const res = await patch(b.rootId, { parentId: a.navId })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/cycle/)
+  })
+
   it('the database refuses a cycle written directly (primary or secondary)', async () => {
     const t = await tree()
     await expect(prisma.taxonomyNode.update({ where: { id: t.rootId }, data: { parentId: t.navId } })).rejects.toThrow(/cycle/)

@@ -82,10 +82,16 @@ describe('accepting values', () => {
     expect(v.originalValue).toMatchObject({ number: 9 })
   })
 
-  it('a Phase A value (no evidence) can never be accepted', async () => {
+  it('a Phase A value can never be accepted, even with a quote (API and database)', async () => {
     const { values } = await column()
-    await prisma.productLeverValue.update({ where: { id: values[0].id }, data: { origin: ValueOrigin.PHASE_A, evidenceQuote: null } })
-    expect((await api().post(`/api/admin/values/${values[0].id}/accept`).set(as())).status).toBe(400)
+    // Keeps its quote and source, so only the Phase A rule can refuse it.
+    await prisma.productLeverValue.update({ where: { id: values[0].id }, data: { origin: ValueOrigin.PHASE_A } })
+    const res = await api().post(`/api/admin/values/${values[0].id}/accept`).set(as())
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/Phase A/)
+    await expect(prisma.productLeverValue.update({
+      where: { id: values[0].id }, data: { status: ValueStatus.ACCEPTED, acceptMode: AcceptMode.SINGLE, reviewedAt: new Date() },
+    })).rejects.toThrow(/phase_a_not_accepted/)
   })
 
   it('mark unknown stores an explicit unknown that does not count toward coverage', async () => {

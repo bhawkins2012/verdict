@@ -63,6 +63,7 @@ export function fixtureTransport(): Transport {
   return async (req) => {
     const res = serve(req.url)
     fixtureRequestLog.push({ url: req.url, status: res.status })
+    if (fixtureRequestLog.length > 1000) fixtureRequestLog.splice(0, fixtureRequestLog.length - 1000)
     return res
   }
 }
