@@ -1,6 +1,6 @@
 # ADR: Taxonomy and the unified generation run
 
-**Status:** proposed (branch `generation-run`). Nothing is implemented until this note is approved.
+**Status:** accepted with changes (branch `generation-run`). The answers to the open questions and the changes made at approval are in section 5; where section 5 differs from sections 1 to 4, section 5 wins.
 
 **Product rules:** `docs/product-spec.md`, especially:
 - "Product taxonomy"
@@ -646,3 +646,73 @@ Public reads use only `listed` products, `published` values and `APPROVED` node 
 18. **Discovery count:** **15–20 required; fewer fails the stage with `too_few_products`** so the admin can add notes and re-run. Or accept 10–14 with a warning (niche nodes).
 19. **The `/bot` page:** **a short static public page** for the User-Agent link. Or a link to the repository README.
 20. **Manual values:** **removed** (spec: no manual data entry; quotes required). Or an admin path with URL plus pasted quote, verified against a fresh fetch of that URL (needs the host on the allow-list).
+
+## 5. Decisions recorded
+
+### Changes at approval
+
+**A1. Automated product approval** (replaces manual product approval, and the rule that a domain joins the allow-list when an admin approves a product; spec step 4, "Verify and auto-approve").
+
+- **`BrandDomain`** (`brand_domains`, replaces `ManufacturerDomain`):
+  - Fields: `brandKey` (normalized brand: lower case, letters and digits only), `brand` (display), `host` (unique; lower case, `www.` stripped), `status` (`VERIFIED` / `PENDING_CONFIRMATION` / `REJECTED`), `verifiedVia` (`AUTOMATIC` / `ADMIN`), `verifiedById`, `verifiedAt`, `checkResult` (JSON: which checks passed, the site name found), and the rate-limit and robots.txt cache fields D2 gave `ManufacturerDomain`.
+  - A brand may have more than one verified host.
+  - **The allow-list is the set of `VERIFIED` hosts.**
+- **Brand verification is automatic.** When discovery returns a host for a brand with no verified domain, the run checks robots.txt, then fetches only that host's home page (the same fetcher, rate limit and denylist). The host is **verified** when all of these hold:
+  - it is https;
+  - it is not denylisted;
+  - its registrable-domain label (the label left of the public suffix, from `tldts`, hyphens removed) contains the normalized brand name;
+  - the home page's schema.org `Organization` or `Brand` name, or its `og:site_name`, matches the brand. "Matches" means equal after normalization, ignoring trailing generic words such as "baby", "usa", "official", "inc".
+- **Failures.** A host that fails any check goes to the admin **Confirm brand domain** list with the failed check: one click per brand, ever. A denylisted host is never offered there; it is refused outright.
+  - Fetching a home page is the one fetch allowed before a host is verified. It is limited to `https://<host>/` and that host's robots.txt.
+  - Confirming a brand domain queues its waiting products.
+- **A product is auto-approved** (`catalogStatus = APPROVED`, `approvedVia = AUTO`) when all of these pass:
+  1. its URL host is a verified host for its brand;
+  2. the page fetch outcome is `OK`;
+  3. the fetched page names the model: a normalized match of the model name in the `<title>`, an `<h1>` or a schema.org `Product` name;
+  4. the extraction call classifies the product as belonging to this node with confidence `HIGH` (only `HIGH` auto-approves);
+  5. it is not a duplicate of a product in another node (same normalized brand and name, or the same URL).
+- **Products that fail a check do not block the run.** They become `NEEDS_ATTENTION` with `attentionCheck` and `attentionReason`, and the run continues.
+  - Values are still extracted when the page was fetched, so the admin can approve with one click (`approvedVia = ADMIN`) or ignore them.
+  - Needs-attention products are never listed.
+- **Run flow.** The run goes PLACE → LEVERS → DISCOVER → **VERIFY** (brand domains) → EXTRACT (with the product checks) → `READY_FOR_REVIEW`, with no pause.
+  - In the review screen the admin can reject or unlist any product before publish; "Products" is a review of exceptions, not an approval step.
+  - The product approve endpoints stay, for needs-attention products.
+- **Tests** (all mutation-checked):
+  - a lookalike domain is rejected (brand token present, site name mismatch);
+  - a denylisted host is rejected;
+  - a model-name mismatch goes to needs attention;
+  - `LOW` and `MEDIUM` node classification go to needs attention;
+  - a duplicate goes to needs attention.
+
+**A2. PDF manuals (Q4 changed).**
+- **Which PDFs.** Text-based PDF manuals are included when either:
+  - they are hosted on a verified host of the product's brand; or
+  - they are linked from the approved product's page. These are fetched under the same rules: denylist, robots.txt, rate limit and no blocks bypassed. Their host does not need to be a verified brand host. This follows your instruction; the spec says "hosted there", so this is a deliberate widening, recorded here.
+- **How many.** At most 2 PDFs per product, chosen from links whose text or URL mentions a manual, instructions or specifications.
+- **Text.** It is extracted with **`pdfjs-dist`** 6.5.438 (new dependency) in a separate Node process (`backend/pdf-worker/extract-text.mjs`). The parser runs on untrusted files with a memory cap and a 20 s timeout, and the backend (CommonJS) need not load an ES module.
+- **Scanned PDFs.** A PDF with under 100 characters of text per page on average is treated as scanned and skipped (`SCANNED_PDF`).
+- **Same rules as pages.** The extraction call names the document each quote comes from. The verbatim check runs against that document's text, and `sourceUrl` is that document's URL. Unit rules are unchanged.
+- **Cost.** PDF text is capped at about 20k tokens per product, which raises the estimate to about **$4.30 per node** (extraction about $0.19 per product).
+
+**A3. Discovery count (Q18 changed).** 15–20 products is the target. A result of 10–14 is accepted with a warning shown on the run; the stage fails (`too_few_products`) only below 10.
+
+**A4. Manual values (Q20 changed).** An admin can enter a value with a source URL and a pasted quote.
+- **URL on a verified host of the product's brand, and fetchable:** the quote must appear verbatim in a fresh fetch (same normalization as D7); otherwise the save is a 400 and nothing is stored.
+- **The fetch is blocked** (robots.txt disallows, 401/403/429, a challenge page): the value is stored as **admin-attested**, with the fetch outcome.
+- **The URL is not on a verified host of the product's brand:** refused, because values come only from verified brand domains.
+- **Status.** Manual values are stored `ACCEPTED`, accepted one by one by the admin who entered them, with `origin = MANUAL`.
+- **Coverage and bulk accept.** Both kinds count toward coverage. They are never bulk-accepted: the API excludes them and the database trigger refuses `acceptMode = BULK` on a manual value.
+- **Public pages** label an admin-attested value "Admin-attested".
+
+**A5. All other open questions:** the recommended defaults in section 4.
+
+### Dependencies (D14, updated)
+
+| Package | Version | Why |
+|---|---|---|
+| `robots-parser` | 3.0.1 | robots.txt matching |
+| `htmlparser2` | 12.0.0 | HTML to text, and title, h1, schema.org and og:site_name for the checks |
+| `tldts` | 7.4.19 | Public Suffix List lookups for the registrable-domain check (A1) |
+| `pdfjs-dist` | 6.5.438 | PDF text (A2). It pulls in the optional native `@napi-rs/canvas`, which is only used for rendering; we never render. |
+
+All are pinned exactly, at versions at least two weeks old.
