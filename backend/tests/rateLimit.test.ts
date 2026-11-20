@@ -10,6 +10,7 @@ const PROBE = '/api/auth/me' // counted by the /api limiter; answers 401 without
 
 async function loadApp(env: Record<string, string | undefined>): Promise<Express> {
   process.env.RATE_LIMIT_MAX = '3'
+  process.env.ADMIN_RATE_LIMIT_MAX = '6'
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
@@ -61,5 +62,23 @@ describe('TRUST_PROXY=0 (no proxy trusted)', () => {
 describe('TRUST_PROXY=true', () => {
   it('is refused at startup rather than letting clients spoof their IP', async () => {
     await expect(loadApp({ TRUST_PROXY: 'true' })).rejects.toThrow(/spoof/)
+  })
+})
+
+describe('admin routes', () => {
+  it('have their own, higher limit: a review session does not use up the general one, and vice versa', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const app = await loadApp({ TRUST_PROXY: undefined })
+      const admin = (ip: string) => request(app).get('/api/admin/config').set('X-Forwarded-For', ip)
+      // Over the general limit (3) on admin routes: still answered (401 here: no token), up to the admin limit (6).
+      for (let i = 0; i < 6; i++) expect((await admin('203.0.113.50')).status).toBe(401)
+      expect((await admin('203.0.113.50')).status).toBe(429)
+      // The general limit for the same client is untouched by those admin requests.
+      for (let i = 0; i < 3; i++) expect((await hit(app, '203.0.113.50')).status).toBe(401)
+      expect((await hit(app, '203.0.113.50')).status).toBe(429)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })

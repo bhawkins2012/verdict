@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { Prisma, PriceTier } from '@prisma/client'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/authenticate'
+import { authenticate, optionalAuthenticate } from '../middleware/authenticate'
 import { AppError } from '../middleware/errorHandler'
-import { browseCategories, productLevers } from '../levers/catalog'
+import { NodeKind } from '@prisma/client'
+import { productLevers } from '../catalog/public'
+import { publicProductWhere, visibleProductWhere } from '../catalog/products'
 
 export const productsRouter = Router()
 
@@ -30,7 +32,8 @@ productsRouter.get('/', async (req: Request, res: Response) => {
   const { q, category, brand, page = '1', limit = '20' } = req.query as Record<string, string>
   const skip = (parseInt(page) - 1) * parseInt(limit)
 
-  const where: Prisma.ProductWhereInput = {}
+  // Discovered products appear only once approved (docs/adr-generation-run.md D2).
+  const where: Prisma.ProductWhereInput = { AND: [publicProductWhere()] }
   if (q) {
     where.OR = [
       { name: { contains: q, mode: 'insensitive' } },
@@ -63,16 +66,28 @@ productsRouter.get('/', async (req: Request, res: Response) => {
 })
 
 // GET /api/products/:id
-productsRouter.get('/:id', async (req: Request, res: Response) => {
-  const product = await prisma.product.findUnique({
-    where: { id: req.params.id },
+productsRouter.get('/:id', optionalAuthenticate, async (req: Request, res: Response) => {
+  const product = await prisma.product.findFirst({
+    where: { id: req.params.id, ...visibleProductWhere(req.userId) },
     include: {
-      _count: { select: { reviewThreads: true, aggregatedReviews: true } }
+      _count: { select: { reviewThreads: true, aggregatedReviews: true } },
+      node: { select: { slug: true, name: true, publishedAt: true } },
     }
   })
-  if (!product) throw new AppError(404, 'Product not found')
-  // The five published levers of its category with this product's values and sources (ADR D6).
-  res.json({ ...product, levers: await productLevers(product.id, product.categoryId) })
+  // Discovered products are public only once a publish lists them (docs/adr-generation-run.md D10).
+  if (!product) {
+    throw new AppError(404, 'Product not found')
+  }
+  // The five published levers of its node with this product's published values and evidence (ADR D12).
+  const { node, ...rest } = product
+  res.json({
+    id: rest.id, name: rest.name, brand: rest.brand, category: rest.category, subcategory: rest.subcategory, description: rest.description,
+    imageUrl: rest.imageUrl, websiteUrl: rest.websiteUrl, priceTier: rest.priceTier, attributes: rest.attributes,
+    avgRatingInitial: rest.avgRatingInitial, avgRatingLongterm: rest.avgRatingLongterm, driftScoreAvg: rest.driftScoreAvg,
+    totalReviewCount: rest.totalReviewCount, createdAt: rest.createdAt, _count: rest._count, isDryRun: rest.isDryRun,
+    node: node && rest.listed && node.publishedAt ? { slug: node.slug, name: node.name } : null,
+    levers: await productLevers(product.id),
+  })
 })
 
 // POST /api/products — add a new product (authenticated)
@@ -86,11 +101,11 @@ productsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     if (existing) throw new AppError(409, 'A product with this Amazon ASIN already exists')
   }
 
-  // Only admins create categories; an unknown one is a 400 that lists the valid ones (ADR Q10).
+  // A product belongs to a decision node; an unknown one is a 400 that lists the valid ones (ADR Q10).
   const slug = body.data.category.trim().toLowerCase()
-  const category = await prisma.category.findUnique({ where: { slug }, select: { id: true, slug: true } })
+  const category = await prisma.taxonomyNode.findFirst({ where: { slug, kind: NodeKind.DECISION }, select: { id: true, slug: true } })
   if (!category) {
-    const valid = await prisma.category.findMany({ orderBy: { slug: 'asc' }, select: { slug: true } })
+    const valid = await prisma.taxonomyNode.findMany({ where: { kind: NodeKind.DECISION }, orderBy: { slug: 'asc' }, select: { slug: true } })
     throw new AppError(400, `Unknown category "${body.data.category.slice(0, 50)}". Valid categories: ${valid.map((c) => c.slug).join(', ') || '(none yet)'}`, {
       validCategories: valid.map((c) => c.slug),
     })
@@ -99,7 +114,7 @@ productsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   const d = body.data
   const product = await prisma.product.create({
     data: {
-      name: d.name, brand: d.brand, category: category.slug, categoryId: category.id, subcategory: d.subcategory,
+      name: d.name, brand: d.brand, category: category.slug, nodeId: category.id, subcategory: d.subcategory,
       description: d.description, imageUrl: d.imageUrl, websiteUrl: d.websiteUrl, priceTier: d.priceTier,
       attributes: d.attributes, amazonAsin: d.amazonAsin, createdBy: req.userId,
     }
@@ -107,9 +122,12 @@ productsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   res.status(201).json(product)
 })
 
-// GET /api/products/categories/list — categories to browse: only those with published levers (ADR Q13).
-// Kept for older clients; GET /api/categories is the same list with names.
+// GET /api/products/categories/list — published decision nodes (kept for older clients; GET /api/categories
+// is the tree).
 productsRouter.get('/categories/list', async (_req: Request, res: Response) => {
-  const categories = await browseCategories()
-  res.json(categories.map(c => ({ name: c.slug, count: c.productCount })))
+  const nodes = await prisma.taxonomyNode.findMany({
+    where: { kind: NodeKind.DECISION, publishedAt: { not: null } }, orderBy: { name: 'asc' },
+    select: { slug: true, _count: { select: { products: { where: { listed: true } } } } },
+  })
+  res.json(nodes.map((n) => ({ name: n.slug, count: n._count.products })))
 })

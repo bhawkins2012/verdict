@@ -6,8 +6,8 @@ import { createProvider } from './nudges/providers'
 import { loadNudgeConfig } from './nudges/config'
 import { startNudgeRuntime } from './nudges/runtime'
 import { drainAccountEmails } from './auth/mailer'
-import { loadLeverConfig } from './levers/config'
-import { drainLeverRuns, expireStaleRuns } from './levers/runs'
+import { loadGenerationConfig } from './generation/config'
+import { drainGenerationRuns, startGenerationReconciler } from './generation/runs'
 
 const PORT = process.env.PORT || 3001
 
@@ -20,10 +20,10 @@ try {
   process.exit(1)
 }
 const nudgeConfig = loadNudgeConfig()
-// Lever generation: a live mode without ANTHROPIC_API_KEY, or a bad limit, stops startup (docs/adr-levers.md D3).
+// Generation runs: a live mode without ANTHROPIC_API_KEY, or a bad cap, stops startup (docs/adr-generation-run.md D5.6).
 try {
-  const leverConfig = loadLeverConfig()
-  logger.info('Lever generation configured', { mode: leverConfig.mode, model: leverConfig.mode === 'live' ? leverConfig.model : 'dry-run', dailyLimit: leverConfig.dailyLimit })
+  const g = loadGenerationConfig()
+  logger.info('Generation configured', { mode: g.mode, model: g.mode === 'live' ? g.model : 'dry-run', runCapUsd: g.runCapUsd, dailyCapUsd: g.dailyCapUsd })
 } catch (err) {
   logger.error(err instanceof Error ? err.message : String(err))
   process.exit(1)
@@ -41,8 +41,9 @@ const server = app.listen(PORT, () => {
   logger.info(`🚀 Verdict API running on http://localhost:${PORT}`)
   logger.info(`📖 API docs at http://localhost:${PORT}/api/docs`)
 
-  // Runs left RUNNING by a crash or restart are failed as timeouts once they are stale.
-  void expireStaleRuns().catch((err) => logger.warn('Could not expire stale lever runs', { error: err instanceof Error ? err.message : String(err) }))
+  // Generation: stages that stopped heartbeating are marked STALLED (an admin resumes them), and fetched page
+  // text older than 24 hours is deleted. At startup and every minute.
+  if (process.env.NODE_ENV !== 'test') startGenerationReconciler()
 
   // Nudge worker and reconciler
   if (process.env.NODE_ENV !== 'test') {
@@ -57,9 +58,9 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {
     logger.info('Shutting down', { signal })
     server.close()
-    void Promise.all([drainAccountEmails(10_000), drainLeverRuns(10_000)]).then(([emails, runs]) => {
+    void Promise.all([drainAccountEmails(10_000), drainGenerationRuns(10_000)]).then(([emails, runs]) => {
       if (!emails) logger.warn('Account emails still in flight at shutdown')
-      if (!runs) logger.warn('Lever generation runs still in flight at shutdown; they will be failed as timeouts')
+      if (!runs) logger.warn('Generation work still in flight at shutdown; its stage will be marked stalled and can be resumed')
       process.exit(0)
     })
   })

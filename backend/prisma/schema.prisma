@@ -49,14 +49,20 @@ model User {
   nudges             Nudge[]
   verificationTokens EmailVerificationToken[]
 
-  createdCategories   Category[]          @relation("CategoryCreatedBy")
-  publishedCategories Category[]          @relation("CategoryLeversPublishedBy")
-  approvedLevers      ValueLever[]        @relation("LeverApprovedBy")
-  retiredLevers       ValueLever[]        @relation("LeverRetiredBy")
-  editedLevers        ValueLever[]        @relation("LeverEditedBy")
-  leverRuns           LeverCandidateRun[]
-  surveyImports       SurveyImport[]
-  recordedLeverValues ProductLeverValue[]
+  createdNodes         TaxonomyNode[]      @relation("NodeCreatedBy")
+  publishedNodes       TaxonomyNode[]      @relation("NodePublishedBy")
+  approvedExplainers   TaxonomyNode[]      @relation("NodeExplainerApprovedBy")
+  createdLeverDefs     LeverDefinition[]   @relation("LeverDefinitionCreatedBy")
+  editedLeverDefs      LeverDefinition[]   @relation("LeverDefinitionEditedBy")
+  approvedLevers       NodeLever[]         @relation("NodeLeverApprovedBy")
+  retiredLevers        NodeLever[]         @relation("NodeLeverRetiredBy")
+  leverRuns            LeverCandidateRun[]
+  generationRuns       GenerationRun[]
+  surveyImports        SurveyImport[]
+  reviewedProducts     Product[]           @relation("ProductReviewedBy")
+  reviewedLeverValues  ProductLeverValue[] @relation("ValueReviewedBy")
+  editedLeverValues    ProductLeverValue[] @relation("ValueEditedBy")
+  verifiedBrandDomains BrandDomain[]
 
   @@map("users")
 }
@@ -85,20 +91,21 @@ model UserDemographics {
 // ─────────────────────────────────────────
 
 model Product {
-  id          String     @id @default(cuid())
+  id          String        @id @default(cuid())
   name        String
   brand       String?
-  // Kept equal to the category's slug on every write: the ML service and older filters read this string.
-  // categoryId is the real link (docs/adr-levers.md D2); removing this column is in the backlog.
+  // Kept equal to the node's slug on every write: the ML service and older filters read this string.
+  // nodeId is the real link (docs/adr-generation-run.md D2); removing this column is in the backlog.
   category    String
-  categoryId  String?
-  categoryRef Category?  @relation(fields: [categoryId], references: [id])
+  // A decision node (trigger in SQL); null = unplaced, never listed.
+  nodeId      String?
+  node        TaxonomyNode? @relation(fields: [nodeId], references: [id])
   subcategory String?
   description String?
   imageUrl    String?
   websiteUrl  String?
   priceTier   PriceTier?
-  attributes  Json       @default("{}") // flexible KV for category-specific attrs
+  attributes  Json          @default("{}") // flexible KV for category-specific attrs
 
   // External IDs for aggregation
   amazonAsin    String? @unique
@@ -114,6 +121,25 @@ model Product {
   reviewThreads     ReviewThread[]
   aggregatedReviews AggregatedReview[]
   leverValues       ProductLeverValue[]
+  publishedValues   PublishedLeverValue[]
+
+  // Catalog (docs/adr-generation-run.md D2, section 5 A1). Discovered products start PROPOSED and are
+  // approved automatically when every check passes, or go to NEEDS_ATTENTION with the failed check.
+  catalogStatus     CatalogStatus         @default(APPROVED)
+  approvedVia       ApprovedVia?
+  attentionCheck    String?
+  attentionReason   String?
+  manufacturerUrl   String?
+  discoveredByRunId String?
+  discoveredByRun   GenerationRun?        @relation(fields: [discoveredByRunId], references: [id], onDelete: SetNull)
+  reviewedById      String?
+  reviewedBy        User?                 @relation("ProductReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  // Written only by the publish transaction: shown in its node's public list.
+  listed            Boolean               @default(false)
+  isDryRun          Boolean               @default(false)
+  alsoListedIn      ProductAlsoListedIn[]
+  extractionItems   ExtractionItem[]
 
   // Computed fields updated by background jobs
   avgRatingInitial  Float?
@@ -122,7 +148,7 @@ model Product {
   totalReviewCount  Int    @default(0)
 
   @@index([category])
-  @@index([categoryId])
+  @@index([nodeId])
   @@index([brand])
   @@map("products")
 }
@@ -415,6 +441,15 @@ enum UserRole {
   ADMIN
 }
 
+// ─────────────────────────────────────────
+// TAXONOMY, LEVERS AND THE GENERATION RUN (docs/adr-generation-run.md)
+// ─────────────────────────────────────────
+
+enum NodeKind {
+  NAVIGATION // children, an explainer; no levers or products
+  DECISION // a leaf: five published levers and a product list
+}
+
 enum LeverType {
   MEASUREMENT
   CATEGORY
@@ -422,9 +457,8 @@ enum LeverType {
   BOOLEAN
 }
 
-// How a MEASUREMENT lever's value is recorded. DIMENSIONS: folded length, width and height in inches plus
-// an optional one-hand-fold flag; the filterable number is the volume computed from them (cu ft), never
-// entered by hand.
+// How a MEASUREMENT lever's value is recorded. DIMENSIONS: length, width and height in inches plus an
+// optional one-hand-fold flag; the filterable number is the volume computed from them (cu ft).
 enum LeverInputFormat {
   SINGLE
   DIMENSIONS
@@ -432,13 +466,14 @@ enum LeverInputFormat {
 
 enum LeverStatus {
   CANDIDATE
-  APPROVED // approved = published: always exactly 0 or 5 per category (deferred trigger in SQL)
+  APPROVED // approved = published: always exactly 0 or 5 per node (deferred trigger in SQL)
   RETIRED
 }
 
 enum LeverOrigin {
   GENERATED
   ADMIN
+  REFERENCE // the Phase A stroller set, an input to the Full-size strollers run
 }
 
 enum LeverRunStatus {
@@ -452,88 +487,263 @@ enum LeverRunMode {
   DRY_RUN
 }
 
-enum ValueSourceType {
-  URL
-  ADMIN_ENTERED
+enum CatalogStatus {
+  PROPOSED
+  APPROVED
+  NEEDS_ATTENTION
+  REJECTED
 }
 
-model Category {
-  id          String   @id @default(cuid())
-  slug        String   @unique // lower(btrim(...)); also the value of Product.category
-  name        String
-  searchTerms String[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+enum ApprovedVia {
+  AUTO
+  ADMIN
+}
+
+enum ValueStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+enum ValueOrigin {
+  EXTRACTED // from a fetched manufacturer page or PDF, quote checked verbatim
+  MANUAL // entered by an admin with a URL and a pasted quote (section 5 A4)
+  PHASE_A // migrated Phase A value without evidence; can never pass the gate
+}
+
+enum Confidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum AcceptMode {
+  SINGLE
+  BULK
+}
+
+enum GenerationRunKind {
+  NODE
+  EXPLAINER
+}
+
+enum GenerationRunStatus {
+  ACTIVE
+  READY_FOR_REVIEW
+  STALLED
+  FAILED
+  CANCELLED
+  PUBLISHED
+}
+
+enum RunStage {
+  PLACE
+  LEVERS
+  DISCOVER
+  VERIFY
+  EXTRACT
+  EXPLAIN
+}
+
+enum StageStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  STALLED
+}
+
+enum ItemStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  WAITING // the brand's domain is waiting for an admin to confirm it
+}
+
+enum CallStatus {
+  RESERVED
+  DONE
+  FAILED
+}
+
+enum FetchOutcome {
+  OK
+  ROBOTS_DISALLOWED
+  NOT_ALLOWED
+  HTTP_ERROR
+  BLOCKED
+  UNSUPPORTED_TYPE
+  TOO_LARGE
+  NETWORK
+  SCANNED_PDF
+}
+
+enum FetchedKind {
+  PAGE
+  PDF
+  HOMEPAGE
+}
+
+enum BrandDomainStatus {
+  VERIFIED
+  PENDING_CONFIRMATION
+  REJECTED
+}
+
+enum BrandVerifiedVia {
+  AUTOMATIC
+  ADMIN
+}
+
+// The Phase A `categories` table, renamed (ids kept).
+model TaxonomyNode {
+  id             String         @id @default(cuid())
+  slug           String         @unique // lower(btrim(...)); also the value of Product.category
+  name           String
+  kind           NodeKind       @default(DECISION)
+  // Primary parent: drives breadcrumbs. Navigation nodes only (trigger); no cycles (trigger).
+  parentId       String?
+  parent         TaxonomyNode?  @relation("NodeParent", fields: [parentId], references: [id], onDelete: Restrict)
+  children       TaxonomyNode[] @relation("NodeParent")
+  position       Int            @default(0)
+  searchTerms    String[]
+  // Set on Car seats; inherited by every descendant (all their levers are safety-flagged).
+  safetyCritical Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  createdById    String?
+  createdBy      User?          @relation("NodeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Navigation nodes: how the children differ, written by an EXPLAINER run, public once approved.
+  explainer             String?
+  explainerChildLines   Json? // { "<child slug>": "one line" }
+  explainerApprovedAt   DateTime?
+  explainerApprovedById String?
+  explainerApprovedBy   User?     @relation("NodeExplainerApprovedBy", fields: [explainerApprovedById], references: [id], onDelete: SetNull)
+
+  // Decision nodes: set by the atomic publish. Null: hidden from browse.
+  publishedAt   DateTime?
+  publishedById String?
+  publishedBy   User?     @relation("NodePublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  secondaryParents   NodeSecondaryParent[] @relation("SecondaryChild")
+  secondaryChildren  NodeSecondaryParent[] @relation("SecondaryParent")
+  products           Product[]
+  alsoListedProducts ProductAlsoListedIn[]
+  levers             NodeLever[]
+  runs               GenerationRun[]
+  legacyRuns         LeverCandidateRun[]
+  surveyImports      SurveyImport[]
+  publishedValues    PublishedLeverValue[]
+
+  @@index([parentId])
+  @@map("taxonomy_nodes")
+}
+
+// "Also listed in": a node shown under another navigation node too. Covered by the cycle trigger.
+model NodeSecondaryParent {
+  nodeId      String
+  node        TaxonomyNode @relation("SecondaryChild", fields: [nodeId], references: [id], onDelete: Cascade)
+  parentId    String
+  parent      TaxonomyNode @relation("SecondaryParent", fields: [parentId], references: [id], onDelete: Cascade)
   createdById String?
-  createdBy   User?    @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
 
-  // Set when a set of five levers is published. Null: the category is hidden from browse.
-  leversPublishedAt   DateTime?
-  leversPublishedById String?
-  leversPublishedBy   User?     @relation("CategoryLeversPublishedBy", fields: [leversPublishedById], references: [id], onDelete: SetNull)
-
-  products      Product[]
-  levers        ValueLever[]
-  runs          LeverCandidateRun[]
-  surveyImports SurveyImport[]
-
-  @@map("categories")
+  @@id([nodeId, parentId])
+  @@index([parentId])
+  @@map("node_secondary_parents")
 }
 
-model ValueLever {
-  id         String   @id @default(cuid())
-  categoryId String
-  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
+// A lever defined once and shared by sibling nodes, so the same attribute is measured the same way.
+model LeverDefinition {
+  id            String           @id @default(cuid())
   name          String
+  nameKey       String           @unique // normalized name: lower case, single spaces
   type          LeverType
   inputFormat   LeverInputFormat @default(SINGLE)
-  unit          String? // MEASUREMENT only (CHECK in SQL)
+  unit          String? // canonical unit, MEASUREMENT only (CHECK in SQL)
   explanation   String
   relatedNeeds  String[]
-  allowedValues String[] // CATEGORY only; required (>= 2) to publish
+  allowedValues String[] // CATEGORY only
+  safetyFlag    Boolean          @default(false)
+  minValue      Float? // plausibility range in the canonical unit (optional)
+  maxValue      Float?
+  origin        LeverOrigin
+  createdById   String?
+  createdBy     User?            @relation("LeverDefinitionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  editedById    String?
+  editedBy      User?            @relation("LeverDefinitionEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
+  editedAt      DateTime?
 
-  status   LeverStatus        @default(CANDIDATE)
-  position Int? // 1-5, set exactly when APPROVED (CHECK in SQL)
-  origin   LeverOrigin
-  runId    String?
-  run      LeverCandidateRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  nodeLevers      NodeLever[]
+  values          ProductLeverValue[]
+  publishedValues PublishedLeverValue[]
 
-  approvedById String?
-  approvedBy   User?     @relation("LeverApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  approvedAt   DateTime?
-  retiredById  String?
-  retiredBy    User?     @relation("LeverRetiredBy", fields: [retiredById], references: [id], onDelete: SetNull)
-  retiredAt    DateTime?
-  editedById   String?
-  editedBy     User?     @relation("LeverEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
-  editedAt     DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  values ProductLeverValue[]
-
-  // NULL positions (candidates, retired) never collide in Postgres.
-  @@unique([categoryId, position])
-  @@index([categoryId, status])
-  @@map("value_levers")
+  @@map("lever_definitions")
 }
 
+// A definition's place on one decision node.
+model NodeLever {
+  id           String          @id @default(cuid())
+  nodeId       String
+  node         TaxonomyNode    @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   LeverDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  status       LeverStatus     @default(CANDIDATE)
+  position     Int? // 1-5, set exactly when APPROVED (CHECK in SQL)
+  // definition.safetyFlag, or the node is safety-critical (trigger keeps it true there)
+  safety       Boolean         @default(false)
+  origin       LeverOrigin
+  runId        String?
+  run          GenerationRun?  @relation(fields: [runId], references: [id], onDelete: SetNull)
+  note         String? // the model's note, e.g. why a reference lever should be dropped
+  // Snapshot of the definition taken at publish; public pages read this.
+  published    Json?
+  approvedById String?
+  approvedBy   User?           @relation("NodeLeverApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  retiredById  String?
+  retiredBy    User?           @relation("NodeLeverRetiredBy", fields: [retiredById], references: [id], onDelete: SetNull)
+  retiredAt    DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([nodeId, definitionId])
+  @@unique([nodeId, position])
+  @@index([nodeId, status])
+  @@map("node_levers")
+}
+
+model ProductAlsoListedIn {
+  productId String
+  product   Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  nodeId    String
+  node      TaxonomyNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@id([productId, nodeId])
+  @@index([nodeId])
+  @@map("product_also_listed_in")
+}
+
+// Phase A lever runs, kept read-only as history (docs/adr-generation-run.md D3).
 model LeverCandidateRun {
-  id          String   @id @default(cuid())
+  id          String       @id @default(cuid())
   categoryId  String
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category    TaxonomyNode @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   mode        LeverRunMode
   status      LeverRunStatus @default(RUNNING)
-  model       String // requested model, or "dry-run"
-  servedModel String? // model named in the API response
-  input       Json // prompt version, category, notes, max tokens, effort
-  output      Json? // validated candidates; null on failure
-  error       String? // short reason on failure; never a key or a raw response body
+  model       String
+  servedModel String?
+  input       Json
+  output      Json?
+  error       String?
 
   inputTokens     Int?
   outputTokens    Int?
@@ -543,26 +753,24 @@ model LeverCandidateRun {
   createdAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  levers ValueLever[]
-
   @@index([mode, createdAt])
   @@index([categoryId, createdAt])
   @@map("lever_candidate_runs")
 }
 
 model SurveyImport {
-  id           String   @id @default(cuid())
-  categoryId   String
-  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  id           String       @id @default(cuid())
+  nodeId       String
+  node         TaxonomyNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
   filename     String
   uploadedById String?
-  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
-  uploadedAt   DateTime @default(now())
+  uploadedBy   User?        @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt   DateTime     @default(now())
   rowCount     Int
 
   rankings SurveyRanking[]
 
-  @@index([categoryId, uploadedAt])
+  @@index([nodeId, uploadedAt])
   @@map("survey_imports")
 }
 
@@ -579,33 +787,240 @@ model SurveyRanking {
 }
 
 model ProductLeverValue {
-  id        String     @id @default(cuid())
-  productId String
-  product   Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
-  leverId   String
-  lever     ValueLever @relation(fields: [leverId], references: [id], onDelete: Cascade)
+  id           String          @id @default(cuid())
+  productId    String
+  product      Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   LeverDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  status ValueStatus @default(PROPOSED)
+  origin ValueOrigin
 
   isUnknown   Boolean  @default(false)
-  valueNumber Float? // MEASUREMENT (for DIMENSIONS: the computed volume in cu ft)
+  valueNumber Float? // MEASUREMENT, canonical unit (DIMENSIONS: the computed volume in cu ft)
   unit        String?
-  valueText   String? // CATEGORY: one of the lever's allowedValues
+  valueText   String? // CATEGORY: one of the definition's allowedValues
   valueBool   Boolean? // BOOLEAN; DIMENSIONS: one-hand fold
   valueList   String[] // COMPATIBILITY_LIST
-  dimLengthIn Float? // DIMENSIONS only
+  dimLengthIn Float?
   dimWidthIn  Float?
   dimHeightIn Float?
   detail      String?
 
-  sourceType  ValueSourceType
-  sourceUrl   String? // required exactly when sourceType = URL (CHECK in SQL)
-  sourceLabel String?
-  isSample    Boolean         @default(false)
+  // Evidence (docs/adr-generation-run.md D7): as the page states it, before unit conversion.
+  statedValue          String?
+  statedUnit           String?
+  evidenceQuote        String?
+  sourceUrl            String?
+  confidence           Confidence?
+  unknownReason        String?
+  // Manual values whose source could not be fetched (section 5 A4).
+  adminAttested        Boolean       @default(false)
+  attestedFetchOutcome FetchOutcome?
 
-  recordedById String? // set by every API path; null only for seed data outside dev/test, or after the user was deleted
-  recordedBy   User?    @relation(fields: [recordedById], references: [id], onDelete: SetNull)
-  recordedAt   DateTime @default(now())
+  runId       String?
+  run         GenerationRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  extractedAt DateTime?
 
-  @@unique([productId, leverId])
-  @@index([leverId])
+  reviewedById  String?
+  reviewedBy    User?       @relation("ValueReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt    DateTime?
+  acceptMode    AcceptMode?
+  editedById    String?
+  editedBy      User?       @relation("ValueEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
+  editedAt      DateTime?
+  originalValue Json? // the extracted value before the first admin edit
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, definitionId])
+  @@index([definitionId])
+  @@index([runId])
   @@map("product_lever_values")
+}
+
+// What the public sees: a copy of each accepted value of the five levers, written only by the publish
+// transaction (docs/adr-generation-run.md D10). Edits, re-extraction and review after a publish change
+// product_lever_values, never this table, so nothing reaches the public until the next publish.
+model PublishedLeverValue {
+  id           String          @id @default(cuid())
+  nodeId       String
+  node         TaxonomyNode    @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   LeverDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  isUnknown     Boolean  @default(false)
+  valueNumber   Float?
+  unit          String?
+  valueText     String?
+  valueBool     Boolean?
+  valueList     String[]
+  dimLengthIn   Float?
+  dimWidthIn    Float?
+  dimHeightIn   Float?
+  detail        String?
+  evidenceQuote String?
+  sourceUrl     String?
+  adminAttested Boolean  @default(false)
+  publishedAt   DateTime
+
+  @@unique([productId, definitionId])
+  @@index([nodeId, definitionId])
+  @@map("published_lever_values")
+}
+
+model GenerationRun {
+  id          String              @id @default(cuid())
+  nodeId      String
+  node        TaxonomyNode        @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  kind        GenerationRunKind
+  mode        LeverRunMode
+  status      GenerationRunStatus @default(ACTIVE)
+  createdById String?
+  createdBy   User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  notes       String?
+  model       String // requested model, or "dry-run"
+  capUsd      Decimal             @db.Decimal(10, 4)
+  estimateUsd Decimal?            @db.Decimal(10, 4)
+  warning     String? // e.g. "Only 12 products found (target 15-20)"
+  error       String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  finishedAt  DateTime?
+  // Set when the run first reached READY_FOR_REVIEW (the admin notice is sent once).
+  readyAt     DateTime?
+
+  stages   GenerationRunStage[]
+  calls    GenerationCall[]
+  items    ExtractionItem[]
+  levers   NodeLever[]
+  products Product[]
+  values   ProductLeverValue[]
+  pages    FetchedPage[]
+
+  @@index([nodeId, createdAt])
+  @@index([status])
+  @@map("generation_runs")
+}
+
+model GenerationRunStage {
+  id          String        @id @default(cuid())
+  runId       String
+  run         GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stage       RunStage
+  status      StageStatus   @default(PENDING)
+  attempts    Int           @default(0)
+  startedAt   DateTime?
+  heartbeatAt DateTime?
+  finishedAt  DateTime?
+  error       String?
+  output      Json?
+
+  @@unique([runId, stage])
+  @@index([status, heartbeatAt])
+  @@map("generation_run_stages")
+}
+
+// The cost ledger: one row per API call, reserved before the call (worst case), settled after.
+model GenerationCall {
+  id              String        @id @default(cuid())
+  runId           String
+  run             GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stage           RunStage
+  productId       String?
+  model           String
+  servedModel     String?
+  status          CallStatus    @default(RESERVED)
+  reservedUsd     Decimal       @db.Decimal(10, 6)
+  costUsd         Decimal?      @db.Decimal(10, 6)
+  inputTokens     Int?
+  outputTokens    Int?
+  cacheReadTokens Int?
+  webSearches     Int?
+  error           String?
+  createdAt       DateTime      @default(now())
+  finishedAt      DateTime?
+
+  @@index([createdAt])
+  @@index([runId])
+  @@map("generation_calls")
+}
+
+model ExtractionItem {
+  id           String        @id @default(cuid())
+  runId        String
+  run          GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  status       ItemStatus    @default(PENDING)
+  fetchOutcome FetchOutcome?
+  httpStatus   Int?
+  fetchedAt    DateTime?
+  attempts     Int           @default(0)
+  // Each auto-approval check: { brandDomain, fetch, modelNamed, nodeFit, duplicate } with pass/fail + reason.
+  checks       Json?
+  documents    Json? // [{ url, kind, outcome, chars }]
+  error        String?
+  claimedAt    DateTime?
+  heartbeatAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([runId, productId])
+  @@index([runId, status])
+  @@map("extraction_items")
+}
+
+// Extracted text of a fetched page or PDF. Deleted 24 h after fetching; every read filters expiresAt.
+model FetchedPage {
+  id          String         @id @default(cuid())
+  url         String
+  kind        FetchedKind
+  runId       String?
+  run         GenerationRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  productId   String?
+  text        String
+  contentHash String
+  fetchedAt   DateTime       @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+  @@index([url])
+  @@map("fetched_pages")
+}
+
+// The allow-list: verified manufacturer hosts per brand (section 5 A1).
+model BrandDomain {
+  id           String            @id @default(cuid())
+  brandKey     String // normalized brand: lower case letters and digits
+  brand        String
+  host         String            @unique // lower case, no leading "www."
+  status       BrandDomainStatus
+  verifiedVia  BrandVerifiedVia?
+  verifiedById String?
+  verifiedBy   User?             @relation(fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt   DateTime?
+  checkResult  Json?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([brandKey])
+  @@map("brand_domains")
+}
+
+// Per-host fetch state: the rate limiter's clock, the robots.txt cache, and a pause after a block.
+model FetchHost {
+  host            String    @id // lower case, no leading "www."
+  lastFetchAt     DateTime?
+  robotsTxt       String?
+  robotsStatus    String? // "ok", "allow_all" (4xx), "disallow_all" (5xx / network)
+  robotsFetchedAt DateTime?
+  crawlDelaySec   Int?
+  blockedUntil    DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@map("fetch_hosts")
 }

@@ -8,7 +8,7 @@
 // Two checks, both at boot:
 // 1. When the source schema and the generated client's copy of it are both on disk (dev, Codespaces, CI,
 //    a dist/ build run from the repo), they must be identical: this catches ANY model or field change.
-// 2. REQUIRED lists what the nudge engine, email verification and value levers read and write, checked against the
+// 2. REQUIRED lists what the nudge engine, email verification and the catalog/generation run read and write, checked against the
 //    loaded client's datamodel: it also works where the schema file is not shipped. Adding a field to that
 //    code? Add it here; tests/prismaClientGuard.test.ts checks this list against schema.prisma.
 import fs from 'fs'
@@ -20,7 +20,7 @@ export const REQUIRED_MODELS: Record<string, readonly string[]> = {
     'email', 'emailVerified', 'emailVerifiedAt', 'emailNudgesEnabled', 'emailNudgesConsentAt',
     'emailNudgesFirstEnabledAt', 'nudgePromptDismissedAt', 'timezone', 'nudgeSendHour', 'passwordHash', 'role',
   ],
-  Product: ['category', 'categoryId'],
+  Product: ['category', 'nodeId', 'catalogStatus', 'approvedVia', 'attentionCheck', 'attentionReason', 'manufacturerUrl', 'discoveredByRunId', 'reviewedById', 'reviewedAt', 'listed', 'isDryRun'],
   ReviewThread: ['purchasedAt', 'startedAt', 'stagesCompleted'],
   Review: ['stage', 'capturedAt'],
   Nudge: [
@@ -29,22 +29,45 @@ export const REQUIRED_MODELS: Record<string, readonly string[]> = {
   ],
   EmailVerificationToken: ['userId', 'email', 'tokenHash', 'createdAt', 'expiresAt', 'usedAt', 'supersededAt'],
   EmailRateEvent: ['kind', 'key', 'createdAt', 'sentAt'],
-  Category: ['slug', 'name', 'searchTerms', 'createdById', 'leversPublishedAt', 'leversPublishedById'],
-  ValueLever: [
-    'categoryId', 'name', 'type', 'inputFormat', 'unit', 'explanation', 'relatedNeeds', 'allowedValues', 'status',
-    'position', 'origin', 'runId', 'approvedById', 'approvedAt', 'retiredById', 'retiredAt', 'editedById', 'editedAt',
+  TaxonomyNode: [
+    'slug', 'name', 'kind', 'parentId', 'position', 'searchTerms', 'safetyCritical', 'createdById', 'explainer', 'explainerChildLines',
+    'explainerApprovedAt', 'explainerApprovedById', 'publishedAt', 'publishedById',
   ],
-  LeverCandidateRun: [
-    'categoryId', 'createdById', 'mode', 'status', 'model', 'servedModel', 'input', 'output', 'error',
-    'inputTokens', 'outputTokens', 'cacheReadTokens', 'costUsd', 'createdAt', 'finishedAt',
+  NodeSecondaryParent: ['nodeId', 'parentId', 'createdById', 'createdAt'],
+  LeverDefinition: [
+    'name', 'nameKey', 'type', 'inputFormat', 'unit', 'explanation', 'relatedNeeds', 'allowedValues', 'safetyFlag', 'minValue', 'maxValue',
+    'origin', 'createdById', 'editedById', 'editedAt',
   ],
-  SurveyImport: ['categoryId', 'filename', 'uploadedById', 'uploadedAt', 'rowCount'],
+  NodeLever: [
+    'nodeId', 'definitionId', 'status', 'position', 'safety', 'origin', 'runId', 'note', 'published', 'approvedById', 'approvedAt',
+    'retiredById', 'retiredAt',
+  ],
+  ProductAlsoListedIn: ['productId', 'nodeId'],
+  LeverCandidateRun: ['categoryId', 'mode', 'status', 'model', 'output', 'error', 'costUsd', 'createdAt'],
+  SurveyImport: ['nodeId', 'filename', 'uploadedById', 'uploadedAt', 'rowCount'],
   SurveyRanking: ['importId', 'leverName', 'rank', 'respondentCount'],
   ProductLeverValue: [
-    'productId', 'leverId', 'isUnknown', 'valueNumber', 'unit', 'valueText', 'valueBool', 'valueList',
-    'dimLengthIn', 'dimWidthIn', 'dimHeightIn', 'detail', 'sourceType', 'sourceUrl', 'sourceLabel', 'isSample',
-    'recordedById', 'recordedAt',
+    'productId', 'definitionId', 'status', 'origin', 'isUnknown', 'valueNumber', 'unit', 'valueText', 'valueBool', 'valueList',
+    'dimLengthIn', 'dimWidthIn', 'dimHeightIn', 'detail', 'statedValue', 'statedUnit', 'evidenceQuote', 'sourceUrl', 'confidence',
+    'unknownReason', 'adminAttested', 'attestedFetchOutcome', 'runId', 'extractedAt', 'reviewedById', 'reviewedAt', 'acceptMode',
+    'editedById', 'editedAt', 'originalValue',
   ],
+  PublishedLeverValue: [
+    'nodeId', 'productId', 'definitionId', 'isUnknown', 'valueNumber', 'unit', 'valueText', 'valueBool', 'valueList', 'dimLengthIn',
+    'dimWidthIn', 'dimHeightIn', 'detail', 'evidenceQuote', 'sourceUrl', 'adminAttested', 'publishedAt',
+  ],
+  GenerationRun: [
+    'nodeId', 'kind', 'mode', 'status', 'createdById', 'notes', 'model', 'capUsd', 'estimateUsd', 'warning', 'error', 'finishedAt', 'readyAt',
+  ],
+  GenerationRunStage: ['runId', 'stage', 'status', 'attempts', 'startedAt', 'heartbeatAt', 'finishedAt', 'error', 'output'],
+  GenerationCall: [
+    'runId', 'stage', 'productId', 'model', 'servedModel', 'status', 'reservedUsd', 'costUsd', 'inputTokens', 'outputTokens',
+    'cacheReadTokens', 'webSearches', 'error', 'finishedAt',
+  ],
+  ExtractionItem: ['runId', 'productId', 'status', 'fetchOutcome', 'httpStatus', 'fetchedAt', 'attempts', 'checks', 'documents', 'error', 'claimedAt', 'heartbeatAt'],
+  FetchedPage: ['url', 'kind', 'runId', 'productId', 'text', 'contentHash', 'fetchedAt', 'expiresAt'],
+  BrandDomain: ['brandKey', 'brand', 'host', 'status', 'verifiedVia', 'verifiedById', 'verifiedAt', 'checkResult'],
+  FetchHost: ['host', 'lastFetchAt', 'robotsTxt', 'robotsStatus', 'robotsFetchedAt', 'crawlDelaySec', 'blockedUntil'],
 }
 
 export const REQUIRED_ENUMS: Record<string, readonly string[]> = {
@@ -57,10 +80,26 @@ export const REQUIRED_ENUMS: Record<string, readonly string[]> = {
   LeverType: ['MEASUREMENT', 'CATEGORY', 'COMPATIBILITY_LIST', 'BOOLEAN'],
   LeverInputFormat: ['SINGLE', 'DIMENSIONS'],
   LeverStatus: ['CANDIDATE', 'APPROVED', 'RETIRED'],
-  LeverOrigin: ['GENERATED', 'ADMIN'],
+  LeverOrigin: ['GENERATED', 'ADMIN', 'REFERENCE'],
   LeverRunStatus: ['RUNNING', 'SUCCEEDED', 'FAILED'],
   LeverRunMode: ['LIVE', 'DRY_RUN'],
-  ValueSourceType: ['URL', 'ADMIN_ENTERED'],
+  NodeKind: ['NAVIGATION', 'DECISION'],
+  CatalogStatus: ['PROPOSED', 'APPROVED', 'NEEDS_ATTENTION', 'REJECTED'],
+  ApprovedVia: ['AUTO', 'ADMIN'],
+  ValueStatus: ['PROPOSED', 'ACCEPTED', 'REJECTED'],
+  ValueOrigin: ['EXTRACTED', 'MANUAL', 'PHASE_A'],
+  Confidence: ['HIGH', 'MEDIUM', 'LOW'],
+  AcceptMode: ['SINGLE', 'BULK'],
+  GenerationRunKind: ['NODE', 'EXPLAINER'],
+  GenerationRunStatus: ['ACTIVE', 'READY_FOR_REVIEW', 'STALLED', 'FAILED', 'CANCELLED', 'PUBLISHED'],
+  RunStage: ['PLACE', 'LEVERS', 'DISCOVER', 'VERIFY', 'EXTRACT', 'EXPLAIN'],
+  StageStatus: ['PENDING', 'RUNNING', 'DONE', 'FAILED', 'STALLED'],
+  ItemStatus: ['PENDING', 'RUNNING', 'DONE', 'FAILED', 'WAITING'],
+  CallStatus: ['RESERVED', 'DONE', 'FAILED'],
+  FetchOutcome: ['OK', 'ROBOTS_DISALLOWED', 'NOT_ALLOWED', 'HTTP_ERROR', 'BLOCKED', 'UNSUPPORTED_TYPE', 'TOO_LARGE', 'NETWORK', 'SCANNED_PDF'],
+  FetchedKind: ['PAGE', 'PDF', 'HOMEPAGE'],
+  BrandDomainStatus: ['VERIFIED', 'PENDING_CONFIRMATION', 'REJECTED'],
+  BrandVerifiedVia: ['AUTOMATIC', 'ADMIN'],
 }
 
 export const OUT_OF_DATE_MESSAGE = 'Prisma client is out of date: run npx prisma generate (in backend/: cd backend && npx prisma generate)'

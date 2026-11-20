@@ -8,7 +8,7 @@ export interface AccountEmailSettings {
   postalAddress: string
 }
 
-function message(
+export function message(
   settings: AccountEmailSettings,
   m: { to: string; subject: string; paragraphs: string[]; link?: { href: string; label: string }; idempotencyKey: string }
 ): EmailMessage {
