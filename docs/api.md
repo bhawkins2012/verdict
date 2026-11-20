@@ -111,30 +111,29 @@ Search and browse products.
 ---
 
 ### GET /products/:id
-Get full product details. Since Phase A it also returns `levers`: the five published levers of the product's category (empty if the category has none), each with this product's value and source, and the category typical value (median) for measurements.
+Get full product details. 404 for a discovered product that is not approved (`PROPOSED`, `NEEDS_ATTENTION`, `REJECTED`). Also returns `node` (its published decision node, or null) and `levers`: the node's five published levers with this product's **published** values (the copy written at publish, `docs/adr-generation-run.md` D10), each with its evidence, and the node's typical value (median) for measurements. Empty unless the product is listed in a published node.
 
 ```json
 {
-  "id": "…", "name": "Breeze City Compact", "category": "strollers", "categoryId": "…",
+  "id": "…", "name": "Roam", "brand": "Nestwell", "category": "infant-car-seats", "isDryRun": false,
+  "node": { "slug": "infant-car-seats", "name": "Infant car seats" },
   "levers": [
     {
-      "lever": { "id": "…", "name": "Fold size", "type": "MEASUREMENT", "inputFormat": "DIMENSIONS", "unit": "cu ft",
-                 "explanation": "…", "allowedValues": [], "position": 1 },
-      "value": { "unknown": false, "number": 1.86, "unit": "cu ft", "text": null, "bool": true, "list": [],
-                 "dimensions": { "lengthIn": 21, "widthIn": 17, "heightIn": 9 }, "detail": null,
-                 "source": { "type": "ADMIN_ENTERED", "url": null, "label": "Sample data" },
-                 "isSample": true, "recordedAt": "…" },
-      "typical": 2.92
+      "lever": { "id": "…", "definitionId": "…", "position": 1, "name": "Weight", "type": "MEASUREMENT", "inputFormat": "SINGLE", "unit": "lb",
+                 "explanation": "…", "allowedValues": [] },
+      "value": { "unknown": false, "number": 9.48, "unit": "lb", "text": null, "bool": null, "list": [], "dimensions": null, "detail": null,
+                 "evidence": { "quote": "Carrier weight: 4.3 kg", "url": "https://nestwell.example/car-seats/roam", "adminAttested": false } },
+      "typical": 9.5
     }
   ]
 }
 ```
-`value` is `null` when nothing is recorded; `unknown: true` is an explicit unknown. For a `DIMENSIONS` lever, `number` is the folded volume computed from the dimensions and `bool` is one-hand fold.
+`value` is `{ "unknown": true }` when the product has no accepted value for the lever.
 
 ---
 
 ### POST /products *(auth)*
-Add a new product. `category` must be an existing category slug (case-insensitive); an unknown one is **400** `Unknown category "x". Valid categories: …` with `validCategories: [...]`. Only admins create categories. Fields not listed below are ignored.
+Add a new product. `category` must be the slug of an existing decision node (case-insensitive); anything else is **400** `Unknown category "x". Valid categories: …` with `validCategories: [...]`. Only admins create nodes. The product is placed in the node but not listed until the node is next published with it. Fields not listed below are ignored.
 
 **Body:**
 ```json
@@ -152,68 +151,99 @@ Add a new product. `category` must be an existing category slug (case-insensitiv
 ---
 
 ### GET /products/categories/list
-Categories to browse, with product counts: only categories with published levers (`[{ "name": "<slug>", "count": 4 }]`). Kept for older clients; use `GET /categories`.
+Published decision nodes with listed-product counts (`[{ "name": "<slug>", "count": 13 }]`). Kept for older clients; use `GET /categories`.
 
 ---
 
-## Categories (public)
+## Catalog (public)
 
-Design: `docs/adr-levers.md`. Levers in these responses are always the five approved (published) levers; candidates and retired levers never appear.
+Design: `docs/adr-generation-run.md` D12. Everything here comes from published data: published decision nodes, the five approved levers' snapshots, listed products and the published value copy. Candidates, unlisted products and unreviewed values never appear.
 
 ### GET /categories
-Categories with published levers: `[{ "slug": "strollers", "name": "Strollers", "productCount": 4 }]`. Categories without published levers are hidden from browse.
+The visible taxonomy as a tree: `[{ slug, name, kind, productCount?, children: [...] }]`. A decision node is visible once published; a navigation node once its explainer is approved and something below it is visible.
 
 ### GET /categories/search?q=
-Categories whose name, slug or search terms match `q` (at least 2 characters; a category term inside a longer query matches on whole words). Includes categories still being prepared: `[{ "slug": "car-seats", "name": "Car seats", "published": false }]`; the UI says those are being prepared and does not link them.
+`{ nodes, products }`. `nodes`: taxonomy nodes whose name, slug or search terms match `q` (at least 2 characters; plural and singular both match; a term inside a longer query matches on whole words), public ones first: `{ slug, name, kind, published, path, explainer, children }` (explainer and children only for a visible navigation node). Unpublished matches have `published: false`: the UI says they are being prepared. `products`: listed products whose name or brand matches.
 
 ### GET /categories/:slug
-The category page: `{ category, levers, products, totalInCategory, sort }`. 404 for an unknown category or one without published levers.
+404 unless the node is visible.
 
-- `levers[]`: the five levers in order, each with `options` for building filters: `{ min, max }` for measurements, `{ values }` (known items) for compatibility lists, `null` otherwise.
-- `products[]` (at most 100, sorted by name until Best Fit ships): `{ id, name, brand, imageUrl, avgRatingLongterm, totalReviewCount, values: { <leverId>: value } }`.
-- **Filters** (query string, qs nested syntax), combined with AND; a product with an unknown or missing value never matches an active filter:
+- **Navigation node:** `{ kind: "NAVIGATION", slug, name, breadcrumbs, explainer, children: [{ slug, name, kind, line, productCount, alsoListed }] }`.
+- **Decision node:** `{ kind: "DECISION", slug, name, breadcrumbs, levers, products, total, sort }`.
+  - `levers[]`: the five in order, with `options` for building filters: `{ min, max }` for measurements, `{ values }` for compatibility lists, `null` otherwise.
+  - `products[]` (at most 100, by name until Best Fit ships): the node's listed products plus listed products "also listed in" it: `{ id, name, brand, avgRatingLongterm, totalReviewCount, isDryRun, alsoListed, values: { <leverId>: value } }`.
+  - **Filters** (query string, qs nested syntax), combined with AND; a product with an unknown value never matches an active filter:
 
 | Lever type | Parameters |
 |---|---|
-| Measurement | `lever[<id>][min]`, `lever[<id>][max]` (for fold size: the computed volume); a dimensions lever also takes `lever[<id>][is]=yes|no` (one-hand fold) |
-| Category | `lever[<id>][in]=Rubber,Foam-filled` (allowed values, case-insensitive) |
+| Measurement | `lever[<id>][min]`, `lever[<id>][max]` (for a dimensions lever: the computed volume, plus `lever[<id>][is]=yes|no` for one-hand fold) |
+| Category | `lever[<id>][in]=Rubber,Plastic` (allowed values, case-insensitive) |
 | Compatibility list | `lever[<id>][has]=<item>` |
 | Yes / no | `lever[<id>][is]=yes|no` |
 
 An unknown lever id, a parameter that does not apply to the lever's type or a bad value is **400**.
 
+`breadcrumbs`: the primary path `[{ slug, name, visible }]`.
+
 ---
 
 ## Admin *(auth + admin)*
 
-Every route under `/admin` answers 401 without a token and 403 unless the user's role (read from the database on each request) is `ADMIN`. Roles are granted only with `npm run admin:grant -- <email>` (backend), or the seeded `admin@example.com` in development and test. Design: `docs/adr-levers.md`.
+Every route under `/admin` answers 401 without a token and 403 unless the user's role (read from the database on each request) is `ADMIN`. Roles are granted only with `npm run admin:grant -- <email>` (backend), or the seeded `admin@example.com` in development and test. Design: `docs/adr-generation-run.md`.
+
+**Configuration and taxonomy**
 
 | Method and path | Purpose |
 |---|---|
-| `GET /admin/config` | `{ mode: "dry_run" \| "live", model, dailyLimit, maxTokens }` |
-| `GET /admin/categories` | All categories with approved/candidate/product counts |
-| `POST /admin/categories` | `{ name, slug?, searchTerms? }` → 201; slug derived from the name if omitted; 409 if taken |
-| `GET /admin/categories/:id` | Levers (all statuses, with approval/edit records, value counts and the matching survey ranking), last 10 runs, newest survey (with unmatched rows), products |
-| `POST /admin/categories/:id/runs` | `{ notes? }` (≤ 1000 chars) → **202** `{ runId, mode }`; the run continues after the response. **429** `{ error, retryAt }` over the daily live-run limit |
-| `GET /admin/runs/:id` | Run status (`RUNNING` / `SUCCEEDED` / `FAILED` with `error`), model, tokens, `costUsd`, candidates stored. Runs older than 10 minutes still `RUNNING` are failed as `timeout` first |
-| `POST /admin/categories/:id/levers` | Add a lever by hand: `{ name, type, inputFormat?, unit?, explanation, relatedNeeds?, allowedValues? }` → 201 candidate |
-| `PATCH /admin/levers/:id` | Edit name, type, inputFormat, unit, explanation, relatedNeeds, allowedValues. Type, unit and input format are locked once the lever has values (409) |
-| `POST /admin/levers/:id/retire` | Retire a candidate; 409 for a published lever (publish a set without it instead) |
-| `POST /admin/categories/:id/publish` | `{ leverIds: [5 ids in order] }`: approves and publishes exactly these five, retires the previous set, in one transaction. 400 unless exactly five distinct, non-retired levers of this category, with ≥ 2 allowed values for category levers |
-| `POST /admin/categories/:id/survey?filename=` | Body: CSV text (`Content-Type: text/csv`, ≤ 1 MB) with columns `lever, rank, respondents` → 201. All or nothing: 400 `{ error, rows: [{ row, error }] }` |
-| `GET /admin/products/:id/levers` | The product's published levers with current values, sources and who recorded them |
-| `PUT /admin/products/:productId/levers/:leverId` | Set one value (below) |
-| `POST /admin/categories/:id/lever-values/import[?dryRun=true]` | Body: CSV text. All or nothing; `dryRun=true` validates only. → `{ valid, rows, imported }` or 400 with `rows` |
+| `GET /admin/config` | `{ mode, model, runCapUsd, dailyCapUsd, minProducts, maxTokens, leversPerNode }` |
+| `GET /admin/summary` | `{ readyForReview, brandsToConfirm, unplacedProducts }` (the Admin badge) |
+| `GET /admin/nodes` | The taxonomy tree; per node: kind, published/visible, safety-critical (inherited), launch order, latest run, product and lever counts |
+| `POST /admin/nodes` | `{ name, kind, slug?, parentId?, searchTerms? }` → 201. The parent must be a navigation node; 409 if the slug is taken |
+| `GET /admin/nodes/:id` | Path, parents, children, explainer, the last 10 runs (stages with cost and output) and Phase A runs (history) |
+| `PATCH /admin/nodes/:id` | `{ name?, searchTerms?, parentId?, secondaryParentIds?, safetyCritical? }`. 400 for a cycle (primary or secondary edges) or a decision-node parent; the database refuses both too |
+| `POST /admin/nodes/:id/explainer` | Navigation nodes: `{ explainer (≤ 600), childLines: { <slug>: line } }` approves the explainer |
 
-**Value body** (`PUT /admin/products/:productId/levers/:leverId`): `source` is required, with no default.
+**Runs**
 
-```json
-{ "number": 14.5, "source": { "type": "URL", "url": "https://maker.example/spec" }, "sourceLabel": "Spec page", "detail": "…" }
-```
+| Method and path | Purpose |
+|---|---|
+| `POST /admin/nodes/:id/runs` | `{ notes? }` → **202** `{ runId, mode, kind, estimateUsd }`. A decision node gets PLACE → LEVERS → DISCOVER → VERIFY → EXTRACT; a navigation node gets EXPLAIN. **409** if the node already has an open (active or stalled) run |
+| `GET /admin/runs/:id` | Status (`ACTIVE`, `READY_FOR_REVIEW`, `STALLED`, `FAILED`, `CANCELLED`, `PUBLISHED`), `error`, `warning`, stages with calls, tokens, searches and cost, extraction item counts. Stages without a heartbeat for 10 minutes are marked `STALLED` first |
+| `POST /admin/runs/:id/resume` | Restart the stalled or failed stage (earlier stages are not repeated), or process items left pending → 202 |
+| `POST /admin/runs/:id/cancel` | Cancel |
 
-By lever type: measurement `number` (+ optional `unit`, which must equal the lever's); dimensions `dimensions: { lengthIn, widthIn, heightIn }` and `oneHandFold` (the volume is computed, never sent); category `text` (an allowed value); compatibility list `list: [...]`; yes/no `bool`; or `unknown: true` with no value. `source` is `{ "type": "URL", "url": "https://…" }` (http or https only) or `{ "type": "ADMIN_ENTERED" }`.
+A run that would go over a cost cap stops before the call, as `STALLED` with error `run_cap` or `daily_cap`.
 
-**Lever value CSV** columns: `product_id, lever, value, source` (required), `unit, unknown, detail, source_label, one_hand_fold` (optional). `lever` is the lever name; `source` is a URL or `entered by admin`; lists use `|`; fold size is `L x W x H` in inches; `unknown` and `one_hand_fold` take yes/no.
+**Review**
+
+| Method and path | Purpose |
+|---|---|
+| `GET /admin/nodes/:id/review` | Everything the review screen needs: products (status, failed check and reason, fetch outcomes, documents), levers (coverage `{ found, accepted, products }`, safety, origin, note, shared with), values (typed value, stated value and unit, quote, source, confidence, unknown reason, review record), progress |
+| `POST /admin/products/approve` | `{ productIds }`: approve needs-attention products by hand |
+| `POST /admin/products/reject` | `{ productIds }`: reject (they stay listed until the next publish) |
+| `GET /admin/products/unplaced` | Products in no decision node |
+| `PATCH /admin/products/:id` | `{ nodeId?, alsoListedIn? }`: decision nodes only |
+| `POST /admin/nodes/:id/levers` | Add a lever by hand: `{ name, type, inputFormat?, unit?, explanation, relatedNeeds?, allowedValues?, safetyFlag?, minValue?, maxValue? }`; reuses the shared definition with that name if there is one |
+| `PATCH /admin/levers/:id` | Edit the shared definition behind a node lever (changes it for every node that uses it; public pages keep their snapshot until republished). Type, unit and input format are locked once it has values; a safety flag cannot be removed |
+| `POST /admin/levers/:id/retire` | Retire a candidate; 409 for a published lever |
+| `POST /admin/values/:id/accept` | Accept one value (`acceptMode: SINGLE`). 400 for a Phase A value (no evidence) |
+| `POST /admin/values/:id/reject` | Reject one value |
+| `POST /admin/values/:id/unknown` | Record an explicit unknown (accepted; does not count toward coverage) |
+| `PATCH /admin/values/:id` | Correct an extracted value (`{ number? \| text? \| bool? \| list? \| dimensions? }`); the quote and source stay, the original is kept, and it must be accepted again |
+| `POST /admin/nodes/:id/values/bulk-accept` | `{ definitionId }`: accept the column's high-confidence extracted proposals for approved products. **400** on a safety-flagged lever (all car-seat levers); the database refuses a bulk accept there too |
+| `POST /admin/products/:id/values` | Manual value: `{ definitionId, value, sourceUrl, quote }`. The URL must be on a verified domain of the product's brand; the quote must be in a fresh fetch, or, if the site blocks the fetch (robots.txt, 401/403/429, challenge), the value is stored as admin-attested with the outcome → 201 `{ id, status, adminAttested, attestedFetchOutcome }` |
+
+**Brand domains and publishing**
+
+| Method and path | Purpose |
+|---|---|
+| `GET /admin/brands[?status=]` | Brand domains with their automatic check result and the products waiting on them |
+| `POST /admin/brands/:id/confirm` | Verify a domain (one click per brand); waiting products are processed |
+| `POST /admin/brands/:id/reject` | Reject; waiting products stay in "needs attention" |
+| `DELETE /admin/brands/:id` | Remove a host from the allow-list (future fetches stop) |
+| `POST /admin/nodes/:id/publish` | `{ leverIds: [5 ids in order] }`. One transaction: the node, the five levers (with a snapshot of each definition), the approved products (listed) and a copy of their accepted values go live together; the previous five are retired. 400 unless at least `GENERATION_MIN_PRODUCTS` approved products, each lever has accepted known values for ≥ 80% of them (the 400 lists each failing lever: `{ failing: [{ lever, accepted, products }] }`), and dry-run products only in development or test. 409 while a run is still writing to the node |
+| `POST /admin/nodes/:id/unpublish` | Take the node off the public site |
+| `POST /admin/nodes/:id/survey?filename=` | Owner survey CSV (`lever, rank, respondents`, ≤ 1 MB), all or nothing |
 
 ---
 

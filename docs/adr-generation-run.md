@@ -690,7 +690,7 @@ Public reads use only `listed` products, `published` values and `APPROVED` node 
   - they are linked from the approved product's page. These are fetched under the same rules: denylist, robots.txt, rate limit and no blocks bypassed. Their host does not need to be a verified brand host. This follows your instruction; the spec says "hosted there", so this is a deliberate widening, recorded here.
 - **How many.** At most 2 PDFs per product, chosen from links whose text or URL mentions a manual, instructions or specifications.
 - **Text.** It is extracted with **`pdfjs-dist`** 6.5.438 (new dependency) in a separate Node process (`backend/pdf-worker/extract-text.mjs`). The parser runs on untrusted files with a memory cap and a 20 s timeout, and the backend (CommonJS) need not load an ES module.
-- **Scanned PDFs.** A PDF with under 100 characters of text per page on average is treated as scanned and skipped (`SCANNED_PDF`).
+- **Scanned PDFs.** A PDF with under 25 characters of text per page on average is treated as scanned and skipped (`SCANNED_PDF`).
 - **Same rules as pages.** The extraction call names the document each quote comes from. The verbatim check runs against that document's text, and `sourceUrl` is that document's URL. Unit rules are unchanged.
 - **Cost.** PDF text is capped at about 20k tokens per product, which raises the estimate to about **$4.30 per node** (extraction about $0.19 per product).
 
@@ -711,8 +711,23 @@ Public reads use only `listed` products, `published` values and `APPROVED` node 
 | Package | Version | Why |
 |---|---|---|
 | `robots-parser` | 3.0.1 | robots.txt matching |
-| `htmlparser2` | 12.0.0 | HTML to text, and title, h1, schema.org and og:site_name for the checks |
+| `htmlparser2` | 10.1.0 | HTML to text, and title, h1, schema.org and og:site_name for the checks |
 | `tldts` | 7.4.19 | Public Suffix List lookups for the registrable-domain check (A1) |
 | `pdfjs-dist` | 6.5.438 | PDF text (A2). It pulls in the optional native `@napi-rs/canvas`, which is only used for rendering; we never render. |
 
 All are pinned exactly, at versions at least two weeks old.
+
+### Changes made during implementation
+
+- **A public copy of values** (`published_lever_values`) replaces the `published` flag on `product_lever_values`. Publish copies the accepted values of the five levers there; public pages and filters read only the copy. An edit, a re-extraction or a review decision after a publish therefore never reaches the public before the next publish (with a flag, an edit to a published row would have shown at once).
+- **`listed` is the publish snapshot.** A product rejected, or moved to needs attention by a re-run, after a publish stays listed until the next publish (which lists approved products only). The database requires only that a listed product is placed.
+- **A known value must have a value** (CHECK), so an empty row can never count toward coverage.
+- **Rate limiting and robots.txt per host** live in `fetch_hosts`, separate from the allow-list (`brand_domains`), because PDF hosts linked from a product page and hosts waiting for confirmation need them too.
+- **PDFs "linked from an approved product page"** means: linked from the product's page once that page has passed the brand-domain and fetch checks (its auto-approval also depends on the extraction call that reads the PDFs). At most two, chosen by link text or URL mentioning a manual, instructions or specifications.
+- **Evidence normalization** also maps typographic quotes and dashes to their ASCII forms on both sides (pages and the model differ on these); case and all other punctuation still count.
+- **The stated unit must appear in the quote** (a short spelling such as "in" only right after a number), and the canonical units are `lb`, `in`, `cu ft`, `years` and `count`.
+- **Phase A values** keep their typed value as `PHASE_A` proposals (rather than becoming unknown), so an admin can see what was entered; a CHECK forbids accepting them.
+- **The scanned-PDF threshold** is 25 characters of text per page on average (100 rejected short but real manuals).
+- **`htmlparser2` 10.1.0** instead of 12.0.0: 12.x is ESM-only, which the CommonJS backend's Jest setup cannot load; 10.1.0 ships a CommonJS build.
+- **Search** lists public nodes first, then names that start with the query; plural and singular forms both match.
+- **The review screen** puts the three steps and the publish gate above the grid (not in a side rail), so five lever columns, the products and the evidence panel fit at 1440 px without sideways scrolling. Value progress counts the chosen levers only.

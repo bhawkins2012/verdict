@@ -219,28 +219,12 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 ---
 
 ## 16. Car seat value levers
-**Size:** S (Phase A, after `phase-a-levers`)
-
-**Problem.** The spec leaves the car seat levers open. The `car-seats` category exists (seeded, unpublished, no levers) so a live generation run can propose candidates once an `ANTHROPIC_API_KEY` is set.
-
-**Acceptance criteria**
-- A live run for car seats (`LEVER_GEN_MODE=live`) produces 10 to 12 candidates; tokens and cost are recorded.
-- An admin edits, picks and orders five, and publishes them; the approval record names the admin.
-- The car seat owner survey (if run) is imported and shown next to the candidates before publishing.
-- Product values for the launch car seats are entered with sources (form or CSV).
+**Done by the generation run** (`docs/adr-generation-run.md`): Car seats is a navigation node with three decision nodes; each gets its levers from a run. What remains is running them live (#20).
 
 ---
 
 ## 17. Spec extraction from manufacturer pages
-**Size:** L (Phase A; product spec, "Lever generation and review synthesis", step 4)
-
-**Problem.** Lever values are entered by hand or imported from CSV. The spec calls for an extraction job that reads manufacturer spec pages and manuals reached by permitted routes, stores a source link per value, and has a person spot-check a sample before publishing.
-
-**Acceptance criteria**
-- A job takes a product and a manufacturer URL, fetches only pages whose terms and robots.txt permit it (no logins, no CAPTCHA or rate-limit circumvention), and proposes values for the five levers with the exact source URL per value.
-- Proposed values are not public until an admin accepts them (same rule as levers); accepted values go through the existing value validation (`toValueData`) and carry `sourceType: URL`.
-- A spot-check view samples proposed values per category; the decision is recorded.
-- Tests with recorded fixtures; no network in CI.
+**Done by the generation run** (`docs/adr-generation-run.md` D6, D7): brand-verified fetching under robots.txt and a rate limit, values extracted with a verbatim evidence quote, reviewed one by one on safety levers. Follow-ups: #20 (live verification), #21 (JavaScript-rendered pages).
 
 ---
 
@@ -257,15 +241,55 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 
 ---
 
-## 19. Remove `Product.category` once the ML service reads `categoryId`
-**Size:** S (cleanup after `phase-a-levers`)
+## 19. Remove `Product.category` once the ML service reads `nodeId`
+**Size:** S (cleanup)
 
-**Problem.** Products now link to a `Category` row (`categoryId`), but the free-text `Product.category` stays because the ML service (`ml/main.py`, `models/recommender.py`) and the older `GET /api/products?category=` filter read it. The API keeps the string equal to the category slug on every write, so there are two sources of truth until it is removed.
+**Problem.** Products link to a decision node (`nodeId`; it was `categoryId` before the taxonomy), but the free-text `Product.category` stays because the ML service (`ml/main.py`, `models/recommender.py`) and the older `GET /api/products?category=` filter read it. The API keeps the string equal to the category slug on every write, so there are two sources of truth until it is removed.
 
 **Acceptance criteria**
-- The ML service filters by `categoryId` (SQL quotes `"categoryId"`), with its tests updated.
-- `GET /api/products?category=` and the recommendations route filter by category slug through `categoryId`.
-- A migration makes `products.categoryId` required and drops `products.category`; `migrate diff` is empty.
+- The ML service filters by `nodeId` (SQL quotes `"nodeId"`), with its tests updated.
+- `GET /api/products?category=` and the recommendations route filter by node slug through `nodeId`.
+- A migration drops `products.category`; `migrate diff` is empty.
+
+---
+
+## 20. Generate the launch nodes live
+**Size:** M (needs an `ANTHROPIC_API_KEY`)
+
+**Problem.** The generation run has only run in dry-run mode, with fixtures. Nothing has called the real Anthropic API (web search, structured outputs) or fetched a real manufacturer site.
+
+**Acceptance criteria**
+- `GENERATION_MODE=live` with a key; Infant car seats, then Full-size strollers, generated, reviewed and published; cost per node recorded against the estimate ($2–5).
+- Real robots.txt files, rate limits and block pages observed; brand domains confirmed where the automatic check fails; the needs-attention list reviewed.
+- Prompt or schema changes found along the way made with tests; the remaining five nodes generated in launch order.
+
+---
+
+## 21. JavaScript-rendered manufacturer pages
+**Size:** M (decide after #20)
+
+**Problem.** The fetcher reads server-rendered HTML only (ADR Q5). A brand whose spec table is rendered in the browser gives unknowns, and its node may miss the 80% gate.
+
+**Acceptance criteria**
+- Measure, during #20, how many products lose values this way.
+- If it matters: a headless-browser fetch for verified brand domains only, under the same allow-list, robots.txt, rate-limit and block rules, with the same tests.
+
+---
+
+## 22. Taxonomy growth: proposed children and demand-driven terms
+**Size:** L (spec: "Product taxonomy", "Demand-driven categories")
+
+**Problem.** The launch taxonomy is seeded. The spec has Claude propose the children of a node (with a rationale, approved by an admin), unmet search terms logged as aggregate counts, a weekly ranked list, synonym merging, "notify me when live", and a threshold that starts a run.
+
+**Acceptance criteria**
+- As in the spec; no user id or IP stored with a search term; nothing public before approval.
+
+---
+
+## 23. Bundles (travel systems)
+**Size:** M (deferred by the spec)
+
+**Problem.** A product made of products (a stroller plus car seat) has no model. The schema leaves room (`ProductBundleItem(bundleId, productId, quantity)`), and overlaps use "also listed in" meanwhile.
 
 ---
 
@@ -277,4 +301,5 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 - The frontend production build warns about a chunk over 500 kB; route-level code splitting would fix it.
 - `npm ci` warns that ESLint 9 is no longer supported; plan the ESLint 10 upgrade.
 - `npm run dev:ml` calls bare `uvicorn` and fails unless the ML virtualenv is active (CLAUDE.md, "Known gaps").
-- Value levers (Phase A follow-ups): lever value history is not kept (only the current value with who/when, ADR Q11); the category page lists at most 100 products and sorts by name until Best Fit (Phase C); the one-hand-fold flag of a dimensions lever has a filter but no separate column on the product list; Swagger (`/api/docs`) does not describe the new category and admin routes yet (`docs/api.md` does).
+- Catalog follow-ups: value history is not kept beyond the original of a corrected value; the node page lists at most 100 products and sorts by name until Best Fit (Phase C); the one-hand-fold flag of a dimensions lever has a filter but no separate column on the product list; Swagger (`/api/docs`) does not describe the catalog and admin routes (`docs/api.md` does).
+- Generation run follow-ups: the per-host rate limiter holds a slot even when the request then fails before sending; the review screen refetches the whole node after each decision (fine at 20 products × 12 levers, not at hundreds); `GET /admin/nodes` runs the stuck-stage reconciler on every request (cheap, but could be throttled); the in-memory dry-run fixture request log grows for the life of the process.
