@@ -308,7 +308,9 @@ function ValuesStep({ data, chosen, onChange, announce, onPublish, publishing, p
   }
 
   const act = useMutation({
-    mutationFn: ({ v, action }: { v: ReviewValue; action: 'accept' | 'reject' | 'unknown'; next?: boolean }) => api.post(`/admin/values/${v.id}/${action}`),
+    // `seen`: the value as this screen shows it; if it changed meanwhile (a re-extraction), the API answers 409.
+    mutationFn: ({ v, action }: { v: ReviewValue; action: 'accept' | 'reject' | 'unknown'; next?: boolean }) => api.post(`/admin/values/${v.id}/${action}`, { seen: v.updatedAt }),
+    onError: () => onChange(),
     onSuccess: (_r, { v, action, next }) => {
       announce(`${action === 'accept' ? 'Accepted' : action === 'reject' ? 'Rejected' : 'Marked unknown'}: ${lever?.name} for ${product?.name}`)
       if (next) { const n = nextUnreviewed(cell, v.id); if (n) setCell(n) }

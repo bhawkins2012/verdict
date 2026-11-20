@@ -279,6 +279,8 @@ export interface ReviewValue {
   reviewedBy: string | null
   reviewedAt: string | null
   editedBy: string | null
+  /** Sent back with a decision: the API refuses it (409) if the value changed since. */
+  updatedAt: string
 }
 
 export interface ReviewData {

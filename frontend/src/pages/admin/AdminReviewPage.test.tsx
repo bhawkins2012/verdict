@@ -21,7 +21,7 @@ const value = (p: number, l: number, extra: Partial<ReviewValue> = {}): ReviewVa
   value: { unknown: false, number: 9 + p, unit: 'lb', text: null, bool: null, list: [], dimensions: null, detail: null },
   statedValue: String(9 + p), statedUnit: 'lb', quote: `Lever ${l}: ${9 + p} lb`, sourceUrl: `https://acme.example/${p}`, confidence: 'HIGH',
   unknownReason: null, adminAttested: false, attestedFetchOutcome: null, edited: false, originalValue: null, acceptMode: null, reviewedBy: null,
-  reviewedAt: null, editedBy: null, ...extra,
+  reviewedAt: null, editedBy: null, updatedAt: '2026-11-20T00:00:00.000Z', ...extra,
 })
 
 let data: ReviewData
@@ -96,7 +96,7 @@ describe('values step', () => {
     expect(document.activeElement).toBe(first)
     expect(view?.container.querySelector('[data-testid="evidence-quote"]')?.textContent).toBe('“Lever 0: 9 lb”')
     await key(first ?? null, 'Enter')
-    expect(api.post.mock.calls.map((c) => c[0])).toEqual(['/admin/values/v0-0/accept'])
+    expect(api.post.mock.calls.map((c) => [c[0], c[1]])).toEqual([['/admin/values/v0-0/accept', { seen: '2026-11-20T00:00:00.000Z' }]])
     expect(document.activeElement?.getAttribute('data-cell')).toBe('0-1')
   })
 
