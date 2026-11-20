@@ -121,6 +121,7 @@ model Product {
   reviewThreads     ReviewThread[]
   aggregatedReviews AggregatedReview[]
   leverValues       ProductLeverValue[]
+  publishedValues   PublishedLeverValue[]
 
   // Catalog (docs/adr-generation-run.md D2, section 5 A1). Discovered products start PROPOSED and are
   // approved automatically when every check passes, or go to NEEDS_ATTENTION with the failed check.
@@ -634,6 +635,7 @@ model TaxonomyNode {
   runs               GenerationRun[]
   legacyRuns         LeverCandidateRun[]
   surveyImports      SurveyImport[]
+  publishedValues    PublishedLeverValue[]
 
   @@index([parentId])
   @@map("taxonomy_nodes")
@@ -676,8 +678,9 @@ model LeverDefinition {
   editedBy      User?            @relation("LeverDefinitionEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
   editedAt      DateTime?
 
-  nodeLevers NodeLever[]
-  values     ProductLeverValue[]
+  nodeLevers      NodeLever[]
+  values          ProductLeverValue[]
+  publishedValues PublishedLeverValue[]
 
   @@map("lever_definitions")
 }
@@ -828,8 +831,6 @@ model ProductLeverValue {
   editedAt      DateTime?
   originalValue Json? // the extracted value before the first admin edit
 
-  // Written only by the publish transaction.
-  published Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -837,6 +838,38 @@ model ProductLeverValue {
   @@index([definitionId])
   @@index([runId])
   @@map("product_lever_values")
+}
+
+// What the public sees: a copy of each accepted value of the five levers, written only by the publish
+// transaction (docs/adr-generation-run.md D10). Edits, re-extraction and review after a publish change
+// product_lever_values, never this table, so nothing reaches the public until the next publish.
+model PublishedLeverValue {
+  id           String          @id @default(cuid())
+  nodeId       String
+  node         TaxonomyNode    @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   LeverDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  isUnknown     Boolean  @default(false)
+  valueNumber   Float?
+  unit          String?
+  valueText     String?
+  valueBool     Boolean?
+  valueList     String[]
+  dimLengthIn   Float?
+  dimWidthIn    Float?
+  dimHeightIn   Float?
+  detail        String?
+  evidenceQuote String?
+  sourceUrl     String?
+  adminAttested Boolean  @default(false)
+  publishedAt   DateTime
+
+  @@unique([productId, definitionId])
+  @@index([nodeId, definitionId])
+  @@map("published_lever_values")
 }
 
 model GenerationRun {

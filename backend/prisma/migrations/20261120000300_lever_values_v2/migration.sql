@@ -38,7 +38,6 @@ ALTER TABLE "product_lever_values"
   ADD COLUMN "editedById" TEXT,
   ADD COLUMN "editedAt" TIMESTAMP(3),
   ADD COLUMN "originalValue" JSONB,
-  ADD COLUMN "published" BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
@@ -79,6 +78,37 @@ ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_definiti
 ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_reviewedById_fkey" FOREIGN KEY ("reviewedById") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_editedById_fkey" FOREIGN KEY ("editedById") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 -- product_lever_values.runId gets its foreign key with the generation_runs table (next migration).
+
+-- What the public sees: a copy written only by the publish transaction (ADR D10).
+CREATE TABLE "published_lever_values" (
+    "id" TEXT NOT NULL,
+    "nodeId" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "definitionId" TEXT NOT NULL,
+    "isUnknown" BOOLEAN NOT NULL DEFAULT false,
+    "valueNumber" DOUBLE PRECISION,
+    "unit" TEXT,
+    "valueText" TEXT,
+    "valueBool" BOOLEAN,
+    "valueList" TEXT[],
+    "dimLengthIn" DOUBLE PRECISION,
+    "dimWidthIn" DOUBLE PRECISION,
+    "dimHeightIn" DOUBLE PRECISION,
+    "detail" TEXT,
+    "evidenceQuote" TEXT,
+    "sourceUrl" TEXT,
+    "adminAttested" BOOLEAN NOT NULL DEFAULT false,
+    "publishedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "published_lever_values_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX "published_lever_values_nodeId_definitionId_idx" ON "published_lever_values"("nodeId", "definitionId");
+CREATE UNIQUE INDEX "published_lever_values_productId_definitionId_key" ON "published_lever_values"("productId", "definitionId");
+ALTER TABLE "published_lever_values" ADD CONSTRAINT "published_lever_values_nodeId_fkey" FOREIGN KEY ("nodeId") REFERENCES "taxonomy_nodes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "published_lever_values" ADD CONSTRAINT "published_lever_values_productId_fkey" FOREIGN KEY ("productId") REFERENCES "products"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "published_lever_values" ADD CONSTRAINT "published_lever_values_definitionId_fkey" FOREIGN KEY ("definitionId") REFERENCES "lever_definitions"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "published_lever_values" ADD CONSTRAINT "published_lever_values_known_has_evidence"
+  CHECK ("isUnknown" OR ("evidenceQuote" IS NOT NULL AND "sourceUrl" LIKE 'https://%'));
 
 -- ── Invariants (CHECKs and triggers; migrate diff ignores them) ────────────────────────────────────
 -- An accepted, known value has its evidence: a quote and an https source.
