@@ -111,7 +111,7 @@ Search and browse products.
 ---
 
 ### GET /products/:id
-Get full product details. 404 unless the product is listed in a published node, or was added by a user (`POST /products`) and not rejected: a discovered product is public only once a publish lists it, and dry-run products are 404 outside development and test. Also returns `node` (its published decision node, or null) and `levers`: the node's five published levers with this product's **published** values (the copy written at publish, `docs/adr-generation-run.md` D10), each with its evidence, and the node's typical value (median) for measurements. Empty unless the product is listed in a published node.
+Get full product details. Optional auth. 404 unless the product is listed in a published node, or was added by a user (`POST /products`) and not rejected, or the signed-in user already has a review thread for it (so a product rejected or unlisted later stays reachable for its reviewers): a discovered product is public only once a publish lists it, and dry-run products are 404 outside development and test. Also returns `node` (its published decision node, or null) and `levers`: the node's five published levers with this product's **published** values (the copy written at publish, `docs/adr-generation-run.md` D10), each with its evidence, and the node's typical value (median) for measurements. Empty unless the product is listed in a published node.
 
 ```json
 {
@@ -219,7 +219,7 @@ A run that would go over a cost cap stops before the call, as `STALLED` with err
 | Method and path | Purpose |
 |---|---|
 | `GET /admin/nodes/:id/review` | Everything the review screen needs: products (status, failed check and reason, fetch outcomes, documents), levers (coverage `{ found, accepted, products }`, safety, origin, note, shared with), values (typed value, stated value and unit, quote, source, confidence, unknown reason, review record), progress |
-| `POST /admin/products/approve` | `{ productIds }`: approve products by hand (needs attention, proposed, rejected, or added by a user) into the catalog. 400 if one links to a retailer or review site |
+| `POST /admin/products/approve` | `{ productIds }`: approve products by hand (needs attention, proposed, rejected, or added by a user) into the catalog. 400 if its page (manufacturer URL, else the URL it was added with) is a retailer or review site |
 | `POST /admin/products/reject` | `{ productIds }`: reject any placed product, user-added ones included (listed ones stay listed until the next publish) |
 | `GET /admin/products/unplaced` | Products in no decision node |
 | `PATCH /admin/products/:id` | `{ nodeId?, alsoListedIn? }`: decision nodes only. Moving a product unlists it and deletes its old node's public values |
@@ -229,7 +229,7 @@ A run that would go over a cost cap stops before the call, as `STALLED` with err
 | `POST /admin/values/:id/accept` | Accept one value (`acceptMode: SINGLE`). Body `{ seen? }`: the value's `updatedAt` as the screen showed it; 409 if it changed since. 400 for a Phase A value (no evidence) |
 | `POST /admin/values/:id/reject` | Reject one value (`{ seen? }`, 409 as above) |
 | `POST /admin/values/:id/unknown` | Record an explicit unknown (accepted; does not count toward coverage; `{ seen? }`, 409 as above) |
-| `PATCH /admin/values/:id` | Correct an extracted value (`{ number? \| text? \| bool? \| list? \| dimensions? }`); the quote and source stay, the original is kept, and it must be accepted again |
+| `PATCH /admin/values/:id` | Correct an extracted value (`{ number? \| text? \| bool? \| list? \| dimensions?, seen? }`); the quote and source stay, the original is kept, and it must be accepted again. 409 if `seen` is stale |
 | `POST /admin/nodes/:id/values/bulk-accept` | `{ definitionId }`: accept the column's high-confidence extracted proposals for approved products. **400** on a safety-flagged lever (all car-seat levers); the database refuses a bulk accept there too |
 | `POST /admin/products/:id/values` | Manual value: `{ definitionId, value, sourceUrl, quote }`. The URL must be on a verified domain of the product's brand; the quote must be in a fresh fetch, or, if the site blocks the fetch (robots.txt, 401/403/429, challenge), the value is stored as admin-attested with the outcome → 201 `{ id, status, adminAttested, attestedFetchOutcome }` |
 
@@ -250,7 +250,7 @@ A run that would go over a cost cap stops before the call, as `STALLED` with err
 ## Reviews
 
 ### POST /reviews *(auth)*
-Submit a review (creates thread if first review for this product). 404 for a product that is not public (see `GET /products/:id`).
+Submit a review (creates thread if first review for this product). 404 for a product this user cannot see (see `GET /products/:id`): reviewers keep a product they started reviewing.
 
 **Body:**
 ```json
