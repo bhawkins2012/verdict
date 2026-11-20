@@ -731,3 +731,19 @@ All are pinned exactly, at versions at least two weeks old.
 - **`htmlparser2` 10.1.0** instead of 12.0.0: 12.x is ESM-only, which the CommonJS backend's Jest setup cannot load; 10.1.0 ships a CommonJS build.
 - **Search** lists public nodes first, then names that start with the query; plural and singular forms both match.
 - **The review screen** puts the three steps and the publish gate above the grid (not in a side rail), so five lever columns, the products and the evidence panel fit at 1440 px without sideways scrolling. Value progress counts the chosen levers only.
+
+#### From the code review (before the PR)
+
+- **Products added by users are not in the catalog.** `POST /api/products` still creates an approved product for its own page and reviews (`approvedVia` null), but the catalog (gate, listing, admin counts) is `APPROVED` with `approvedVia` set (`catalog/products.ts`, `IN_CATALOG`; CHECK `products_approved_via`). The review screen shows them as proposed ("added by a user"); an admin approves or rejects them like any exception.
+- **Public product pages follow the catalog.** `GET /api/products/:id` and `POST /api/reviews` see a product only if it is listed, or user-added and not rejected; a discovered product is public only once a publish lists it, and dry-run products are hidden outside development and test.
+- **Review decisions are conditional.** Accept, reject and unknown take `seen` (the value's `updatedAt` as the screen showed it); a value that changed since (a re-extraction, another admin) is a 409 and the screen reloads.
+- **A corrected value is an admin decision too.** A re-extraction skips values that are accepted, manual, or edited (corrected but not yet accepted), and writes values under the same node lock as the review path.
+- **robots.txt** is read from the request's own origin (a www-only site), its redirects must stay on the host, and 401/403/429 or a challenge on robots.txt is a block that pauses the host like any other.
+- **Hosts the fetcher refuses outright:** a non-default port, IP literals, `localhost`, single-label and internal names (`.local`, `.internal`, …). Brand verification fetches the home page from the product URL's own origin.
+- **The unit must follow the number it measures** ("9.1 kg; up to 22 lb" does not support 22 kg). For dimensions, at least one of the three numbers must carry the unit.
+- **Cost reservation for discovery** covers every request it may make (the first plus `MAX_PAUSE_RESUMES` resumes). A failed call with no usage reported keeps a null cost, so its reservation keeps counting against the caps (the request may have been billed).
+- **Resume** puts back only extraction items whose heartbeat is stale, so a live worker's item is never processed twice.
+- **Retailer URLs** proposed by discovery are dropped (counted in the stage output as `droppedRetailers`); an admin cannot approve a product whose URL is a retailer's.
+- **A bot challenge on a manual value's page** is a block: the host is paused and the value is admin-attested with outcome `BLOCKED`.
+- **Moving a product to another node** deletes its old node's public copy; **waiting items of a closed run** (published or cancelled) are failed when their brand is confirmed, so they never block the node's next publish.
+- **Known risk: lookalike domains an admin confirms.** Automatic verification needs both the brand in the registrable domain and a matching site name, but "Confirm brand domain" is one click; an admin who confirms a reseller's domain puts it on the allow-list for that brand. The confirm screen shows the failed check and the site names found; there is no second reviewer.

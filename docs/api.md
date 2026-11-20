@@ -111,7 +111,7 @@ Search and browse products.
 ---
 
 ### GET /products/:id
-Get full product details. 404 for a discovered product that is not approved (`PROPOSED`, `NEEDS_ATTENTION`, `REJECTED`). Also returns `node` (its published decision node, or null) and `levers`: the node's five published levers with this product's **published** values (the copy written at publish, `docs/adr-generation-run.md` D10), each with its evidence, and the node's typical value (median) for measurements. Empty unless the product is listed in a published node.
+Get full product details. 404 unless the product is listed in a published node, or was added by a user (`POST /products`) and not rejected: a discovered product is public only once a publish lists it, and dry-run products are 404 outside development and test. Also returns `node` (its published decision node, or null) and `levers`: the node's five published levers with this product's **published** values (the copy written at publish, `docs/adr-generation-run.md` D10), each with its evidence, and the node's typical value (median) for measurements. Empty unless the product is listed in a published node.
 
 ```json
 {
@@ -133,7 +133,7 @@ Get full product details. 404 for a discovered product that is not approved (`PR
 ---
 
 ### POST /products *(auth)*
-Add a new product. `category` must be the slug of an existing decision node (case-insensitive); anything else is **400** `Unknown category "x". Valid categories: …` with `validCategories: [...]`. Only admins create nodes. The product is placed in the node but not listed until the node is next published with it. Fields not listed below are ignored.
+Add a new product. `category` must be the slug of an existing decision node (case-insensitive); anything else is **400** `Unknown category "x". Valid categories: …` with `validCategories: [...]`. Only admins create nodes. The product gets its own page and can be reviewed at once, but it is not in the node's catalog (not listed, not counted by the publish gate) until an admin approves it on the review screen. Fields not listed below are ignored.
 
 **Body:**
 ```json
@@ -219,16 +219,16 @@ A run that would go over a cost cap stops before the call, as `STALLED` with err
 | Method and path | Purpose |
 |---|---|
 | `GET /admin/nodes/:id/review` | Everything the review screen needs: products (status, failed check and reason, fetch outcomes, documents), levers (coverage `{ found, accepted, products }`, safety, origin, note, shared with), values (typed value, stated value and unit, quote, source, confidence, unknown reason, review record), progress |
-| `POST /admin/products/approve` | `{ productIds }`: approve needs-attention products by hand |
-| `POST /admin/products/reject` | `{ productIds }`: reject (they stay listed until the next publish) |
+| `POST /admin/products/approve` | `{ productIds }`: approve products by hand (needs attention, proposed, rejected, or added by a user) into the catalog. 400 if one links to a retailer or review site |
+| `POST /admin/products/reject` | `{ productIds }`: reject any placed product, user-added ones included (listed ones stay listed until the next publish) |
 | `GET /admin/products/unplaced` | Products in no decision node |
-| `PATCH /admin/products/:id` | `{ nodeId?, alsoListedIn? }`: decision nodes only |
+| `PATCH /admin/products/:id` | `{ nodeId?, alsoListedIn? }`: decision nodes only. Moving a product unlists it and deletes its old node's public values |
 | `POST /admin/nodes/:id/levers` | Add a lever by hand: `{ name, type, inputFormat?, unit?, explanation, relatedNeeds?, allowedValues?, safetyFlag?, minValue?, maxValue? }`; reuses the shared definition with that name if there is one |
 | `PATCH /admin/levers/:id` | Edit the shared definition behind a node lever (changes it for every node that uses it; public pages keep their snapshot until republished). Type, unit and input format are locked once it has values; a safety flag cannot be removed |
 | `POST /admin/levers/:id/retire` | Retire a candidate; 409 for a published lever |
-| `POST /admin/values/:id/accept` | Accept one value (`acceptMode: SINGLE`). 400 for a Phase A value (no evidence) |
-| `POST /admin/values/:id/reject` | Reject one value |
-| `POST /admin/values/:id/unknown` | Record an explicit unknown (accepted; does not count toward coverage) |
+| `POST /admin/values/:id/accept` | Accept one value (`acceptMode: SINGLE`). Body `{ seen? }`: the value's `updatedAt` as the screen showed it; 409 if it changed since. 400 for a Phase A value (no evidence) |
+| `POST /admin/values/:id/reject` | Reject one value (`{ seen? }`, 409 as above) |
+| `POST /admin/values/:id/unknown` | Record an explicit unknown (accepted; does not count toward coverage; `{ seen? }`, 409 as above) |
 | `PATCH /admin/values/:id` | Correct an extracted value (`{ number? \| text? \| bool? \| list? \| dimensions? }`); the quote and source stay, the original is kept, and it must be accepted again |
 | `POST /admin/nodes/:id/values/bulk-accept` | `{ definitionId }`: accept the column's high-confidence extracted proposals for approved products. **400** on a safety-flagged lever (all car-seat levers); the database refuses a bulk accept there too |
 | `POST /admin/products/:id/values` | Manual value: `{ definitionId, value, sourceUrl, quote }`. The URL must be on a verified domain of the product's brand; the quote must be in a fresh fetch, or, if the site blocks the fetch (robots.txt, 401/403/429, challenge), the value is stored as admin-attested with the outcome → 201 `{ id, status, adminAttested, attestedFetchOutcome }` |
@@ -250,7 +250,7 @@ A run that would go over a cost cap stops before the call, as `STALLED` with err
 ## Reviews
 
 ### POST /reviews *(auth)*
-Submit a review (creates thread if first review for this product).
+Submit a review (creates thread if first review for this product). 404 for a product that is not public (see `GET /products/:id`).
 
 **Body:**
 ```json
