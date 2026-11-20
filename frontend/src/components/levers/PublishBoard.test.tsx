@@ -2,13 +2,13 @@ import { act, useState } from 'react'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createBoardCollision, DragTracking, pointerCollision, PublishBoard } from './PublishBoard'
 import { render, Rendered, settle } from '../../test/render'
-import { AdminLever } from '../../types/levers'
+import { BoardLever } from '../../types/levers'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────────────
-const lever = (id: string, name: string, status: AdminLever['status'] = 'CANDIDATE', position: number | null = null): AdminLever => ({
+const lever = (id: string, name: string, status: BoardLever['status'] = 'CANDIDATE', position: number | null = null): BoardLever => ({
   id, name, type: 'BOOLEAN', inputFormat: 'SINGLE', unit: null, explanation: `Why ${name} matters.`, relatedNeeds: [],
-  allowedValues: [], status, position, origin: 'GENERATED', runId: null, approvedBy: null, approvedAt: null, editedBy: null,
-  editedAt: null, valueCount: 0, survey: null,
+  allowedValues: [], status, position, origin: 'GENERATED', approvedBy: null, approvedAt: null, definitionId: `def-${id}`,
+  note: null, safety: false, sharedWith: [], coverage: { found: 0, accepted: 0, products: 0 }, survey: null,
 })
 const LEVERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((n) => lever(n.toLowerCase(), `Lever ${n}`))
 

@@ -25,6 +25,16 @@ export function AppLayout() {
 
   const pendingNudgeCount = nudges?.length || 0
 
+  // Admins: runs ready for review and brand domains waiting for a decision (the in-app notice).
+  const isAdmin = user?.role === 'ADMIN'
+  const { data: adminSummary } = useQuery<{ readyForReview: number; brandsToConfirm: number }>({
+    queryKey: ['admin', 'summary'],
+    queryFn: () => api.get('/admin/summary').then(r => r.data),
+    enabled: isAdmin,
+    refetchInterval: 60_000,
+  })
+  const adminCount = (adminSummary?.readyForReview ?? 0) + (adminSummary?.brandsToConfirm ?? 0)
+
   const queryClient = useQueryClient()
 
   // Phones: the sidebar is a slide-out panel behind a Menu button (md and up: always visible, unchanged).
@@ -127,7 +137,7 @@ export function AppLayout() {
           </NavLink>
 
           {/* Admins only; the API checks the role on every admin request. */}
-          {user?.role === 'ADMIN' && (
+          {isAdmin && (
             <NavLink
               to="/admin"
               className={({ isActive }) => clsx(
@@ -136,7 +146,12 @@ export function AppLayout() {
               )}
             >
               <Shield size={17} />
-              Admin
+              <span className="flex-1">Admin</span>
+              {adminCount > 0 && (
+                <span className="bg-green-600 text-white text-xs font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center" title="Runs ready for review and brand domains to confirm">
+                  {adminCount}<span className="sr-only"> waiting for you</span>
+                </span>
+              )}
             </NavLink>
           )}
         </nav>

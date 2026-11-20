@@ -6,6 +6,7 @@ import { DriftBadge } from '../components/ui/DriftBadge'
 import { SurvivorshipChart } from '../components/reviews/SurvivorshipChart'
 import { ArrowLeft, Star, Plus } from 'lucide-react'
 import { KeySpecs } from '../components/levers/KeySpecs'
+import { DryRunBadge } from '../components/levers/DryRunBadge'
 
 export function ProductPage() {
   const { id } = useParams<{ id: string }>()
@@ -50,7 +51,10 @@ export function ProductPage() {
             <p className="text-sm text-ink-400">{product.brand}</p>
             <h2 className="font-display text-2xl text-ink-900">{product.name}</h2>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-ink-400 capitalize bg-ink-100 px-2 py-0.5 rounded-full">{product.category}</span>
+              {product.node
+                ? <Link to={`/categories/${product.node.slug}`} className="text-xs text-ink-500 bg-ink-100 px-2 py-0.5 rounded-full hover:text-ink-800">{product.node.name}</Link>
+                : <span className="text-xs text-ink-400 capitalize bg-ink-100 px-2 py-0.5 rounded-full">{product.category}</span>}
+              {product.isDryRun && <DryRunBadge />}
               {product.priceTier && (
                 <span className="text-xs text-ink-400">{priceTierLabel[product.priceTier]}</span>
               )}
@@ -73,7 +77,7 @@ export function ProductPage() {
         </div>
       </div>
 
-      <KeySpecs levers={product.levers ?? []} categorySlug={product.category} />
+      <KeySpecs levers={product.levers ?? []} node={product.node} />
 
       {stats?.survivorshipCurve?.length >= 2 && (
         <div className="card p-6 mb-6">

@@ -76,8 +76,11 @@ export interface Product {
   avgRatingLongterm?: number
   driftScoreAvg?: number
   totalReviewCount: number
-  /** GET /api/products/:id only: the category's published levers with this product's values. */
+  /** GET /api/products/:id only: the node's five published levers with this product's published values. */
   levers?: ProductLever[]
+  /** GET /api/products/:id only: the decision node it is listed in, if published. */
+  node?: { slug: string; name: string } | null
+  isDryRun?: boolean
 }
 
 export interface Nudge {

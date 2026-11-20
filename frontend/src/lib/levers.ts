@@ -1,10 +1,10 @@
 import { AxiosError } from 'axios'
-import { LeverFilter, LeverValue, PublicLever } from '../types/levers'
+import { LeverFilter, PublicLever, PublishedValue, TypedValue } from '../types/levers'
 
 const trim = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''))
 
-/** A lever value as text, for the product page and the category list. */
-export function formatLeverValue(lever: Pick<PublicLever, 'type' | 'inputFormat' | 'unit'>, value: LeverValue | null | undefined): string {
+/** A lever value as text, for public pages and the review grid. */
+export function formatLeverValue(lever: Pick<PublicLever, 'type' | 'inputFormat' | 'unit'>, value: TypedValue | PublishedValue | null | undefined): string {
   if (!value) return 'Not recorded yet'
   if (value.unknown) return 'Unknown'
   switch (lever.type) {

@@ -17,9 +17,11 @@ import { RecommendationsPage } from './pages/RecommendationsPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { VerifyEmailPage } from './pages/VerifyEmailPage'
 import { CategoryPage } from './pages/CategoryPage'
-import { AdminCategoriesPage } from './pages/admin/AdminCategoriesPage'
-import { AdminCategoryPage } from './pages/admin/AdminCategoryPage'
-import { AdminProductLeversPage } from './pages/admin/AdminProductLeversPage'
+import { AdminNodesPage } from './pages/admin/AdminNodesPage'
+import { AdminNodePage } from './pages/admin/AdminNodePage'
+import { AdminReviewPage } from './pages/admin/AdminReviewPage'
+import { AdminBrandsPage } from './pages/admin/AdminBrandsPage'
+import { BotPage } from './pages/BotPage'
 import { useAuthStore } from './store/authStore'
 
 const queryClient = new QueryClient({
@@ -65,10 +67,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/recommendations" element={<RecommendationsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/categories/:slug" element={<CategoryPage />} />
-            <Route path="/admin" element={<AdminRoute><AdminCategoriesPage /></AdminRoute>} />
-            <Route path="/admin/categories/:id" element={<AdminRoute><AdminCategoryPage /></AdminRoute>} />
-            <Route path="/admin/products/:id" element={<AdminRoute><AdminProductLeversPage /></AdminRoute>} />
+            <Route path="/admin" element={<AdminRoute><AdminNodesPage /></AdminRoute>} />
+            <Route path="/admin/nodes/:id" element={<AdminRoute><AdminNodePage /></AdminRoute>} />
+            <Route path="/admin/nodes/:id/review" element={<AdminRoute><AdminReviewPage /></AdminRoute>} />
+            <Route path="/admin/brands" element={<AdminRoute><AdminBrandsPage /></AdminRoute>} />
           </Route>
+
+          {/* Linked from the fetcher's User-Agent: public, no login. */}
+          <Route path="/bot" element={<BotPage />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { Product } from '../types'
 import { DriftBadge } from '../components/ui/DriftBadge'
 import { Search, Plus, ArrowRight, Clock } from 'lucide-react'
-import { BrowseCategory, CategorySearchHit } from '../types/levers'
+import { BrowseNode, SearchResult } from '../types/levers'
 
 export function DiscoverPage() {
   const [search, setSearch] = useState('')
@@ -16,15 +16,18 @@ export function DiscoverPage() {
     staleTime: 30_000,
   })
 
-  // Browse: only categories with published levers.
-  const { data: categories } = useQuery<BrowseCategory[]>({
+  // Browse: the visible taxonomy (published decision nodes and the navigation nodes above them).
+  const { data: tree } = useQuery<BrowseNode[]>({
     queryKey: ['categories'],
     queryFn: () => api.get('/categories').then(r => r.data),
   })
+  const decisions: BrowseNode[] = []
+  const collect = (n: BrowseNode) => { if (n.kind === 'DECISION') decisions.push(n); n.children.forEach(collect) }
+  tree?.forEach(collect)
 
-  // Search matches categories first, including ones still being prepared (product spec, "Search").
+  // Search matches taxonomy nodes first, including ones still being prepared (product spec, "Search").
   const term = search.trim()
-  const { data: categoryHits } = useQuery<CategorySearchHit[]>({
+  const { data: hits } = useQuery<SearchResult>({
     queryKey: ['category-search', term],
     queryFn: () => api.get('/categories/search', { params: { q: term } }).then(r => r.data),
     enabled: term.length >= 2,
@@ -34,7 +37,7 @@ export function DiscoverPage() {
   const products: Product[] = data?.products || []
 
   return (
-    <div className="p-8 max-w-5xl mx-auto animate-fade-in">
+    <div className="p-4 md:p-8 max-w-5xl mx-auto animate-fade-in">
       <div className="flex items-center justify-between mb-8">
         <div>
           <h2 className="font-display text-3xl text-ink-900">Discover</h2>
@@ -56,17 +59,21 @@ export function DiscoverPage() {
         />
       </div>
 
-      {/* Categories matching the search come first */}
-      {term.length >= 2 && categoryHits && categoryHits.length > 0 && (
+      {/* Taxonomy nodes matching the search come first */}
+      {term.length >= 2 && hits && hits.nodes.length > 0 && (
         <div className="space-y-2 mb-6" aria-label="Matching categories">
-          {categoryHits.map((c) => c.published ? (
-            <Link key={c.slug} to={`/categories/${c.slug}`} className="card p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
-              <span className="font-medium text-ink-900">{c.name}</span>
-              <span className="text-sm text-ink-500">Compare by the five things that matter most</span>
-              <ArrowRight size={16} className="ml-auto text-ink-400" />
+          {hits.nodes.map((c) => c.published ? (
+            <Link key={c.slug} to={`/categories/${c.slug}`} className="card p-4 block hover:shadow-md transition-shadow">
+              <span className="flex items-center gap-3">
+                <span className="font-medium text-ink-900">{c.name}</span>
+                <span className="text-sm text-ink-500">{c.kind === 'NAVIGATION' ? `Which kind of ${c.name.toLowerCase().replace(/s$/, '')}?` : 'Compare by the five things that matter most'}</span>
+                <ArrowRight size={16} className="ml-auto text-ink-400" />
+              </span>
+              {c.explainer && <span className="block text-sm text-ink-600 mt-1">{c.explainer}</span>}
+              {c.children.length > 0 && <span className="block text-xs text-ink-500 mt-1">{c.children.map((ch) => ch.name).join(' · ')}</span>}
             </Link>
           ) : (
-            <div key={c.slug} className="card p-4 flex items-center gap-3 bg-ink-50">
+            <div key={c.slug} className="card p-4 flex flex-wrap items-center gap-3 bg-ink-50">
               <Clock size={16} className="text-ink-400" />
               <span className="font-medium text-ink-700">{c.name}</span>
               <span className="text-sm text-ink-500">This category is being prepared. Check back soon.</span>
@@ -75,26 +82,26 @@ export function DiscoverPage() {
         </div>
       )}
 
-      {/* Browse categories */}
+      {/* Browse: the decision nodes that are live */}
       <div className="flex gap-2 flex-wrap mb-6">
-        {categories?.map((c) => (
+        {decisions.map((c) => (
           <Link
             key={c.slug}
             to={`/categories/${c.slug}`}
             className="stage-badge border cursor-pointer bg-white text-ink-600 border-ink-200 hover:bg-ink-50"
           >
-            {c.name} <span className="text-ink-400 ml-0.5">({c.productCount})</span>
+            {c.name} <span className="text-ink-400 ml-0.5">({c.productCount ?? 0})</span>
           </Link>
         ))}
       </div>
 
       {/* Grid */}
       {isLoading ? (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {[1,2,3,4,5,6].map(i => <div key={i} className="card h-40 animate-pulse bg-ink-100" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {products.map(product => (
             <ProductCard key={product.id} product={product} />
           ))}
