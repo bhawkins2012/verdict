@@ -15,7 +15,8 @@
     "email:smoke": "ts-node --transpile-only src/scripts/emailSmoke.ts",
     "admin:grant": "ts-node --transpile-only src/scripts/adminRole.ts grant",
     "admin:revoke": "ts-node --transpile-only src/scripts/adminRole.ts revoke",
-    "db:seed:levers": "ts-node prisma/seedLevers.ts"
+    "db:seed:catalog": "ts-node prisma/seedCatalog.ts",
+    "db:seed:levers": "ts-node prisma/seedCatalog.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.5.0",

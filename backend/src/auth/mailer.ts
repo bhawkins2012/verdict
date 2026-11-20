@@ -27,7 +27,7 @@ export function transactionalProvider(): EmailProvider {
   return providerOverride ?? createProvider(loadNudgeConfig())
 }
 
-export type EmailKind = 'verification' | 'signup-attempt' | 'email-changed'
+export type EmailKind = 'verification' | 'signup-attempt' | 'email-changed' | 'generation-ready'
 
 /**
  * Send one account email. `slotEventId` is the per-address rate-limit event claimed before the email was
