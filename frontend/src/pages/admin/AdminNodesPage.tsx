@@ -25,7 +25,8 @@ export function AdminNodesPage() {
   const { data: summary } = useQuery<AdminSummary>({ queryKey: ['admin', 'summary'], queryFn: () => api.get('/admin/summary').then((r) => r.data) })
 
   const launch: AdminTreeNode[] = []
-  const walk = (n: AdminTreeNode) => { if (n.launchOrder && !n.viaSecondary) launch.push(n); n.children.forEach(walk) }
+  // Each node once: a subtree reached through an "also listed in" edge is the same nodes again, so skip it.
+  const walk = (n: AdminTreeNode) => { if (n.viaSecondary) return; if (n.launchOrder) launch.push(n); n.children.forEach(walk) }
   tree?.forEach(walk)
   launch.sort((a, b) => (a.launchOrder ?? 0) - (b.launchOrder ?? 0))
 
