@@ -1,5 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp, Shield } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { LayoutDashboard, Compass, Bell, LogOut, TrendingUp, Shield, Menu, X } from 'lucide-react'
 import { VerificationBanner } from '../account/VerificationBanner'
 import { useAuthStore } from '../../store/authStore'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -26,6 +27,38 @@ export function AppLayout() {
 
   const queryClient = useQueryClient()
 
+  // Phones: the sidebar is a slide-out panel behind a Menu button (md and up: always visible, unchanged).
+  const [menuOpen, setMenuOpen] = useState(false)
+  const asideRef = useRef<HTMLElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const contentRef = useRef<HTMLElement>(null)
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    const content = contentRef.current
+    if (menuOpen) {
+      // Focus moves into the panel, the page behind it is inert, and Escape closes it from anywhere.
+      asideRef.current?.querySelector<HTMLElement>('a, button')?.focus()
+      content?.setAttribute('inert', '')
+      const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+      // Widening past md shows the sidebar anyway; close the phone panel so nothing stays inert.
+      const wide = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 768px)') : null
+      const onWide = () => { if (wide?.matches) setMenuOpen(false) }
+      document.addEventListener('keydown', onKey)
+      wide?.addEventListener('change', onWide)
+      wasOpen.current = true
+      return () => {
+        document.removeEventListener('keydown', onKey)
+        wide?.removeEventListener('change', onWide)
+        content?.removeAttribute('inert')
+      }
+    }
+    // Just closed: return focus to the Menu button (focus was inside the panel, which is now invisible).
+    if (wasOpen.current) {
+      wasOpen.current = false
+      menuButtonRef.current?.focus()
+    }
+  }, [menuOpen])
+
   const handleLogout = async () => {
     await logout()
     // Drop every cached response, so the next user on this browser never sees this user's data.
@@ -35,8 +68,21 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-60 bg-white border-r border-ink-200 flex flex-col shrink-0">
+      {/* Backdrop for the phone menu */}
+      {menuOpen && <div className="fixed inset-0 z-30 bg-ink-900/30 md:hidden" aria-hidden="true" onClick={() => setMenuOpen(false)} />}
+
+      {/* Sidebar: always shown from md up; on phones a panel that is invisible (and out of the tab order) when closed */}
+      <aside
+        ref={asideRef}
+        id="app-sidebar"
+        aria-label="Main menu"
+        onClick={(e) => { if ((e.target as HTMLElement).closest('a')) setMenuOpen(false) }}
+        className={clsx(
+          'w-60 bg-white border-r border-ink-200 flex flex-col shrink-0',
+          'fixed inset-y-0 left-0 z-40 transition-transform md:static md:translate-x-0 md:visible',
+          menuOpen ? 'translate-x-0 visible' : '-translate-x-full invisible',
+        )}
+      >
         {/* Logo */}
         <div className="px-6 py-5 border-b border-ink-100">
           <h1 className="font-display text-2xl text-ink-900">Verdict</h1>
@@ -121,11 +167,29 @@ export function AppLayout() {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-y-auto">
-        <VerificationBanner />
-        <Outlet />
-      </main>
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Phone top bar */}
+        <div className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-ink-200 bg-white">
+          <button
+            ref={menuButtonRef}
+            type="button"
+            className="btn-ghost p-1"
+            aria-controls="app-sidebar"
+            aria-expanded={menuOpen}
+            aria-label="Menu"
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+          <span className="font-display text-xl text-ink-900">Verdict</span>
+        </div>
+
+        {/* Main content */}
+        <main ref={contentRef} className="flex-1 overflow-y-auto">
+          <VerificationBanner />
+          <Outlet />
+        </main>
+      </div>
     </div>
   )
 }
