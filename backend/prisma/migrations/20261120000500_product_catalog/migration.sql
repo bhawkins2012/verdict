@@ -31,8 +31,10 @@ ALTER TABLE "product_also_listed_in" ADD CONSTRAINT "product_also_listed_in_prod
 ALTER TABLE "product_also_listed_in" ADD CONSTRAINT "product_also_listed_in_nodeId_fkey" FOREIGN KEY ("nodeId") REFERENCES "taxonomy_nodes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- ── Invariants (CHECKs and triggers; migrate diff ignores them) ────────────────────────────────────
-ALTER TABLE "products" ADD CONSTRAINT "products_listed_is_approved_and_placed"
-  CHECK (NOT "listed" OR ("catalogStatus" = 'APPROVED' AND "nodeId" IS NOT NULL));
+-- `listed` is the publish-time snapshot: a product rejected or re-checked after a publish stays listed until
+-- the next publish (which lists approved products only), so only placement is required here.
+ALTER TABLE "products" ADD CONSTRAINT "products_listed_is_placed"
+  CHECK (NOT "listed" OR "nodeId" IS NOT NULL);
 ALTER TABLE "products" ADD CONSTRAINT "products_approved_via"
   CHECK ("approvedVia" IS NULL OR "catalogStatus" = 'APPROVED');
 ALTER TABLE "products" ADD CONSTRAINT "products_attention_has_reason"

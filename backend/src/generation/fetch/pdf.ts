@@ -7,7 +7,7 @@ import path from 'path'
 
 export const PDF_TIMEOUT_MS = 20_000
 /** Average characters of text per page below which a PDF counts as scanned. */
-export const SCANNED_CHARS_PER_PAGE = 100
+export const SCANNED_CHARS_PER_PAGE = 25
 
 export type PdfText = { ok: true; text: string; pages: number } | { ok: false; reason: 'scanned' | 'parse_failed' | 'encrypted' | 'timeout' }
 

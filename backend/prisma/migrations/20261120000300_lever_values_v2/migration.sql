@@ -118,6 +118,9 @@ ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_accepted
 -- Phase A values have no evidence and can never be accepted.
 ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_phase_a_not_accepted"
   CHECK ("origin" <> 'PHASE_A' OR "status" <> 'ACCEPTED');
+-- A known value has a value (so an empty row can never count toward coverage).
+ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_known_has_value"
+  CHECK ("isUnknown" OR "valueNumber" IS NOT NULL OR "valueText" IS NOT NULL OR "valueBool" IS NOT NULL OR cardinality("valueList") > 0);
 -- An unknown has no value.
 ALTER TABLE "product_lever_values" ADD CONSTRAINT "product_lever_values_unknown_is_empty"
   CHECK (NOT "isUnknown" OR ("valueNumber" IS NULL AND "valueText" IS NULL AND "valueBool" IS NULL

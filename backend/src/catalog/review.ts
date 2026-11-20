@@ -208,7 +208,7 @@ export async function approveProducts(productIds: string[], userId: string) {
   return { approved: count }
 }
 
-/** Remove products from the node before publish (also unlists at the next publish). */
+/** Remove products from the node. A product already listed stays listed until the next publish (like every change). */
 export async function rejectProducts(productIds: string[], userId: string) {
   const { count } = await prisma.product.updateMany({
     where: { id: { in: productIds }, discoveredByRunId: { not: null } },
