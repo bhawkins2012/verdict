@@ -1,5 +1,6 @@
 // Test helpers for the catalog and the generation run. Every test builds its own small taxonomy under a
 // unique root and uses unique `.example` hosts, so suites never depend on each other or on the launch nodes.
+import Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import {
   AcceptMode, BrandDomainStatus, BrandVerifiedVia, CatalogStatus, Confidence, LeverInputFormat, LeverOrigin, LeverType, NodeKind,
@@ -191,6 +192,11 @@ export function productPage(name: string, specs: string[], opts: { links?: { hre
   const links = (opts.links ?? []).map((l) => `<a href="${l.href}">${l.text}</a>`).join('')
   return `<html><head><title>${opts.title ?? name}</title><script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: opts.title ?? name })}</script></head>`
     + `<body><nav>Menu Shop Sale 99 lb</nav><h1>${opts.title ?? name}</h1><ul>${specs.map((s) => `<li>${s}</li>`).join('')}</ul>${links}<footer>© 2026</footer></body></html>`
+}
+
+/** An error as the SDK builds it from a real API answer. */
+export function apiError(status: number, type: string, message: string, requestId = 'req_011CPROBE') {
+  return Anthropic.APIError.generate(status, { type: 'error', error: { type, message }, request_id: requestId }, undefined, new Headers({ 'request-id': requestId }))
 }
 
 // ── A stub model ────────────────────────────────────────────────────────────────────────────────────

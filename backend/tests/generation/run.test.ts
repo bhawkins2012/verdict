@@ -5,6 +5,7 @@ import {
   CatalogStatus, FetchedKind, GenerationRunStatus, ItemStatus, LeverOrigin, RunStage, StageStatus, ValueStatus,
 } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
+import { logger } from '../../src/lib/logger'
 import { flushGenerationRuns, reconcileGeneration, STALE_MS } from '../../src/generation/runs'
 import { CapError, costUsd, reserveCall, runSpendUsd, SEARCH_RESULT_TOKENS, worstCaseResumedUsd, worstCaseUsd } from '../../src/generation/costs'
 import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, PartialUsageError } from '../../src/generation/model'
@@ -14,7 +15,7 @@ import { makeTextPdf } from '../../src/generation/fixtures/pdf'
 import { api, bearer, cleanup } from '../helpers'
 import { mockProvider } from '../nudges/fixtures'
 import {
-  deleteTree, FakeWeb, forgetHosts, homePage, leverSet, liveMode, PLACEMENT, productPage, registerAdmin, resetGenerationEnv, StubModel,
+  apiError, deleteTree, FakeWeb, forgetHosts, homePage, leverSet, liveMode, PLACEMENT, productPage, registerAdmin, resetGenerationEnv, StubModel,
   testTree, TestTree, uid,
 } from './helpers'
 
@@ -344,7 +345,7 @@ describe('caps, resume and stuck stages', () => {
     m.answers.levers = () => { throw new Error('boom') }
     const r = await run(tree)
     expect(r.status).toBe(GenerationRunStatus.FAILED)
-    expect(r.error).toBe('LEVERS: api_error:unknown')
+    expect(r.error).toBe('LEVERS: api_error:unknown: Error')
     expect(m.calls).toMatchObject({ place: 1, levers: 1 })
     m.answers.levers = good
     expect((await api().post(`/api/admin/runs/${r.id}/resume`).set(bearer(admin.accessToken))).status).toBe(202)
@@ -418,6 +419,32 @@ describe('caps, resume and stuck stages', () => {
     const d = await prisma.generationCall.findFirstOrThrow({ where: { runId: r2.id, stage: RunStage.DISCOVER } })
     expect(Number(d.costUsd)).toBeCloseTo(costUsd('claude-opus-5-5', used) ?? -1, 6)
     expect(d.inputTokens).toBe(100_000)
+  })
+
+  it('an API rejection records its type, message and request id on the stage, the run and the call, and logs them', async () => {
+    liveMode({ GENERATION_RUN_CAP_USD: '1000', GENERATION_DAILY_CAP_USD: '10000' })
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    web(s)
+    const m = model(s)
+    m.answers.levers = () => { throw apiError(400, 'invalid_request_error', 'output_config.format.schema: Schema is too complex for compilation.') }
+    const warn = jest.spyOn(logger, 'warn')
+    try {
+      const r = await run(tree)
+      const text = 'api_error:400: invalid_request_error: "output_config.format.schema: Schema is too complex for compilation." (request_id req_011CPROBE)'
+      expect(r.error).toBe(`LEVERS: ${text}`)
+      const stage = await prisma.generationRunStage.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.LEVERS } })
+      expect(stage.error).toBe(text)
+      const call = await prisma.generationCall.findFirstOrThrow({ where: { runId: r.id, stage: RunStage.LEVERS } })
+      expect(call.error).toBe(text)
+      expect(warn).toHaveBeenCalledWith('Generation model call failed', expect.objectContaining({
+        runId: r.id, stage: RunStage.LEVERS, status: 400, errorType: 'invalid_request_error',
+        apiMessage: 'output_config.format.schema: Schema is too complex for compilation.', requestId: 'req_011CPROBE',
+      }))
+      expect(warn).toHaveBeenCalledWith('Generation stage stopped', expect.objectContaining({ error: text }))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('confirming a brand puts a stalled run\'s waiting items back to pending for Resume (not failed)', async () => {

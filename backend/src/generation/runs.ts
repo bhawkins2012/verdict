@@ -24,7 +24,11 @@ import { excerpt, looksLikeChallenge, parseHtml } from './fetch/html'
 import { extractPdfText } from './fetch/pdf'
 import { DryRunModel } from './fixtures/dryRunModel'
 import { fixtureTransport } from './fixtures/site'
-import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, PartialUsageError, ExtractDocument, ExtractLever, GenerationModel, liveModel, ModelResult, overrideModel } from './model'
+import { describeModelError, modelErrorText } from './apiError'
+import {
+  DISCOVERY_MAX_SEARCHES, DiscoverInput, ExplainInput, ExtractDocument, ExtractLever, GenerationModel, LeversInput, liveModel, MAX_PAUSE_RESUMES, ModelResult,
+  overrideModel, PartialUsageError, PlaceInput,
+} from './model'
 import { notifyRunReady } from './notify'
 import {
   describeIssues, DiscoverySchema, ExplainerSchema, ExtractedValue, ExtractionSchema, LeverSetSchema, MIN_PRODUCTS, PlacementSchema,
@@ -119,15 +123,17 @@ async function callModel(ctx: RunContext, stage: RunStage, productId: string | n
     result = await call()
   } catch (caught) {
     const err = caught instanceof PartialUsageError ? caught.inner : caught
-    // Typed SDK errors: record the status only, never the message body (it can echo request content).
-    const code = err instanceof Anthropic.APIError ? `api_error:${err.status ?? 'connection'}` : 'api_error:unknown'
+    // The status, the API's error type and message (redacted, capped) and the request id: never request content.
+    const described = describeModelError(err)
+    const text = modelErrorText(described)
+    logger.warn('Generation model call failed', { runId: ctx.runId, stage, productId, code: described.code, ...described.meta })
     // An error status means the API answered and did not bill that request: the call costs what its earlier
     // requests used (0 for a single request). A timeout, a dropped connection or anything else may have been
     // billed, so the cost stays unknown and the reservation keeps counting against the caps.
     const answered = err instanceof Anthropic.APIError && typeof err.status === 'number'
     const usage = answered ? (caught instanceof PartialUsageError ? caught.usage : NO_USAGE) : null
-    await settleCall(callId, ctx.config.model, null, live ? usage : null, code)
-    throw new StageFailure(code)
+    await settleCall(callId, ctx.config.model, null, live ? usage : null, text)
+    throw new StageFailure(described.code, described.detail ?? undefined)
   }
   const failed = result.stopReason === 'refusal' ? 'refusal' : result.stopReason === 'max_tokens' ? 'max_tokens' : null
   await settleCall(callId, live ? ctx.config.model : 'dry-run', result.servedModel, live ? result.usage : null, failed)
@@ -284,12 +290,58 @@ async function finishRun(runId: string): Promise<void> {
 
 type StageHandler = (ctx: RunContext) => Promise<unknown>
 
+// ── Model inputs (shared with `npm run generation:probe`, so it sends what the stage would) ─────────
+export type StageNode = RunContext['node']
+
+export async function placeInputFor(node: StageNode): Promise<PlaceInput> {
+  const t = await loadTaxonomy()
+  return { nodeSlug: node.slug, nodeName: node.name, path: t.path(node.id).map((n) => n.name), outline: t.outline() }
+}
+
+export async function leversInputFor(node: StageNode, notes: string | null): Promise<LeversInput> {
+  const t = await loadTaxonomy()
+  const definitions = await prisma.leverDefinition.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, type: true, unit: true, explanation: true } })
+  const reference = await prisma.nodeLever.findMany({
+    where: { nodeId: node.id, origin: LeverOrigin.REFERENCE, status: { not: LeverStatus.RETIRED } },
+    select: { definition: { select: { id: true, name: true, type: true, unit: true, explanation: true } } },
+  })
+  return {
+    nodeSlug: node.slug, nodeName: node.name, path: t.path(node.id).map((n) => n.name), notes,
+    definitions, reference: reference.map((r) => r.definition),
+  }
+}
+
+export async function discoverInputFor(node: StageNode, notes: string | null): Promise<DiscoverInput> {
+  const t = await loadTaxonomy()
+  return { nodeSlug: node.slug, nodeName: node.name, path: t.path(node.id).map((n) => n.name), searchTerms: node.searchTerms, notes }
+}
+
+/** The node's levers as EXTRACT sends them, keyed L1, L2, … in creation order. */
+export async function extractionLeversFor(nodeId: string) {
+  const nodeLevers = await prisma.nodeLever.findMany({
+    where: { nodeId, status: { not: LeverStatus.RETIRED } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { definition: true },
+  })
+  const keyed = nodeLevers.map((l, i) => ({ key: `L${i + 1}`, lever: l }))
+  const leversIn: ExtractLever[] = keyed.map(({ key, lever }) => ({
+    key, name: lever.definition.name, type: lever.definition.type, inputFormat: lever.definition.inputFormat, unit: lever.definition.unit,
+    allowedValues: lever.definition.allowedValues, explanation: lever.definition.explanation,
+  }))
+  return { keyed, leversIn }
+}
+
+export async function explainInputFor(node: StageNode): Promise<ExplainInput> {
+  const t = await loadTaxonomy()
+  const children = t.children(node.id).map((c) => ({ slug: c.node.slug, name: c.node.name }))
+  return { nodeSlug: node.slug, nodeName: node.name, path: t.path(node.id).map((n) => n.name), children }
+}
+
 // ── PLACE ───────────────────────────────────────────────────────────────────────────────────────────
 const place: StageHandler = async (ctx) => {
   const t = await loadTaxonomy()
-  const path = t.path(ctx.node.id).map((n) => n.name)
-  const outline = t.outline()
-  const input = { nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path, outline }
+  const input = await placeInputFor(ctx.node)
+  const outline = input.outline
   const r = await callModel(ctx, RunStage.PLACE, null, outline.length + 2_000, 0, () => ctx.model.place(input, ctx.config))
   const parsed = PlacementSchema.safeParse(r.output)
   if (!parsed.success) throw new StageFailure('validation_failed', describeIssues(parsed.error))
@@ -309,16 +361,8 @@ const place: StageHandler = async (ctx) => {
 
 // ── LEVERS ──────────────────────────────────────────────────────────────────────────────────────────
 const levers: StageHandler = async (ctx) => {
-  const t = await loadTaxonomy()
-  const definitions = await prisma.leverDefinition.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, type: true, unit: true, explanation: true } })
-  const reference = await prisma.nodeLever.findMany({
-    where: { nodeId: ctx.node.id, origin: LeverOrigin.REFERENCE, status: { not: LeverStatus.RETIRED } },
-    select: { definition: { select: { id: true, name: true, type: true, unit: true, explanation: true } } },
-  })
-  const input = {
-    nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path: t.path(ctx.node.id).map((n) => n.name), notes: ctx.notes,
-    definitions, reference: reference.map((r) => r.definition),
-  }
+  const input = await leversInputFor(ctx.node, ctx.notes)
+  const definitions = input.definitions
   const r = await callModel(ctx, RunStage.LEVERS, null, JSON.stringify(input).length + 3_000, 0, () => ctx.model.levers(input, ctx.config))
   const parsed = LeverSetSchema.safeParse(r.output)
   if (!parsed.success) throw new StageFailure('validation_failed', describeIssues(parsed.error))
@@ -370,8 +414,7 @@ const levers: StageHandler = async (ctx) => {
 const productKey = (brand: string, name: string) => `${brandKey(brand)}|${wordsKey(name)}`
 
 const discover: StageHandler = async (ctx) => {
-  const t = await loadTaxonomy()
-  const input = { nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path: t.path(ctx.node.id).map((n) => n.name), searchTerms: ctx.node.searchTerms, notes: ctx.notes }
+  const input = await discoverInputFor(ctx.node, ctx.notes)
   const r = await callModel(ctx, RunStage.DISCOVER, null, 4_000, DISCOVERY_MAX_SEARCHES, () => ctx.model.discover(input, ctx.config), MAX_PAUSE_RESUMES + 1)
   if (r.output === null) throw new StageFailure('no_result', 'the model ended without proposing products')
   const parsed = DiscoverySchema.safeParse(r.output)
@@ -520,7 +563,7 @@ async function processItems(ctx: RunContext, stage: RunStage | null): Promise<Ca
         }
         const code = err instanceof StageFailure ? err.message : 'internal_error'
         if (!(err instanceof StageFailure)) logger.error('Extraction item crashed', { runId: ctx.runId, itemId, error: err instanceof Error ? err.message.slice(0, 300) : String(err) })
-        await prisma.extractionItem.update({ where: { id: itemId }, data: { status: ItemStatus.FAILED, error: code.slice(0, 300) } })
+        await prisma.extractionItem.update({ where: { id: itemId }, data: { status: ItemStatus.FAILED, error: code.slice(0, 500) } })
         const item = await prisma.extractionItem.findUnique({ where: { id: itemId }, select: { productId: true } })
         if (item) await setAttention(item.productId, 'extraction', `extraction failed (${code})`)
       }
@@ -589,12 +632,7 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
     return void (await done({ fetchOutcome: FetchOutcome.NOT_ALLOWED, checks: { brandDomain: { pass: false, reason: 'not verified' } } }))
   }
 
-  const nodeLevers = await prisma.nodeLever.findMany({
-    where: { nodeId: ctx.node.id, status: { not: LeverStatus.RETIRED } },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    include: { definition: true },
-  })
-  const keyed = nodeLevers.map((l, i) => ({ key: `L${i + 1}`, lever: l }))
+  const { keyed, leversIn } = await extractionLeversFor(ctx.node.id)
   const checks: Record<string, CheckResult> = { brandDomain: { pass: true, reason: 'verified domain of the brand' } }
   const documents: { url: string; kind: string; outcome: string; chars?: number; detail?: string }[] = []
 
@@ -672,10 +710,6 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
 
   // The extraction call: every candidate lever from the page and manuals, plus the node-fit classification.
   const t = await loadTaxonomy()
-  const leversIn: ExtractLever[] = keyed.map(({ key, lever }) => ({
-    key, name: lever.definition.name, type: lever.definition.type, inputFormat: lever.definition.inputFormat, unit: lever.definition.unit,
-    allowedValues: lever.definition.allowedValues, explanation: lever.definition.explanation,
-  }))
   const input = {
     nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path: t.path(ctx.node.id).map((n) => n.name),
     product: { brand, name: product.name, url }, levers: leversIn, documents: modelDocs,
@@ -735,9 +769,8 @@ async function processItem(ctx: RunContext, itemId: string): Promise<void> {
 
 // ── EXPLAIN (navigation nodes) ──────────────────────────────────────────────────────────────────────
 const explain: StageHandler = async (ctx) => {
-  const t = await loadTaxonomy()
-  const children = t.children(ctx.node.id).map((c) => ({ slug: c.node.slug, name: c.node.name }))
-  const input = { nodeSlug: ctx.node.slug, nodeName: ctx.node.name, path: t.path(ctx.node.id).map((n) => n.name), children }
+  const input = await explainInputFor(ctx.node)
+  const children = input.children
   const r = await callModel(ctx, RunStage.EXPLAIN, null, 2_000, 0, () => ctx.model.explain(input, ctx.config))
   const parsed = ExplainerSchema.safeParse(r.output)
   if (!parsed.success) throw new StageFailure('validation_failed', describeIssues(parsed.error))
