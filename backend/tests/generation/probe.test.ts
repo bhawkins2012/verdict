@@ -20,6 +20,23 @@ describe('generation:probe', () => {
     expect(lines.at(-1)).toMatch(/^Usage: npm run generation:probe/)
   })
 
+  it('rejects unknown options, and never creates a real client in a test', async () => {
+    const lines: string[] = []
+    expect(await runProbe(['levers', 'x', '--send-twice'], { GENERATION_MODE: 'live', ANTHROPIC_API_KEY: 'k' }, (l) => lines.push(l))).toBe(2)
+    expect(lines[0]).toMatch(/Unknown option --send-twice/)
+    await expect(sendProbe('place', request, config, () => undefined)).rejects.toThrow(/must pass a client/)
+  })
+
+  it('exits 1 when the stage would reject the output', async () => {
+    const message = {
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', stop_reason: 'end_turn', stop_sequence: null,
+      content: [{ type: 'text', text: '{"primaryParentFits": true}' }], usage: { input_tokens: 10, output_tokens: 3 },
+    }
+    const lines: string[] = []
+    expect(await sendProbe('place', request, config, (l) => lines.push(l), clientAnswering(200, message))).toBe(1)
+    expect(lines.join('\n')).toMatch(/validation rejects it/)
+  })
+
   it('prints the full API error', async () => {
     const lines: string[] = []
     const body = { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Schema is too complex for compilation.' }, request_id: 'req_011CPROBE' }

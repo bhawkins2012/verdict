@@ -6,6 +6,7 @@ import {
 } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
 import { logger } from '../../src/lib/logger'
+import { buildProbeRequest } from '../../src/scripts/generationProbe'
 import { flushGenerationRuns, reconcileGeneration, STALE_MS } from '../../src/generation/runs'
 import { CapError, costUsd, reserveCall, runSpendUsd, SEARCH_RESULT_TOKENS, worstCaseResumedUsd, worstCaseUsd } from '../../src/generation/costs'
 import { DISCOVERY_MAX_SEARCHES, MAX_PAUSE_RESUMES, PartialUsageError } from '../../src/generation/model'
@@ -94,6 +95,24 @@ async function run(tree: TestTree) {
 const products = (runId: string) => prisma.product.findMany({ where: { discoveredByRunId: runId }, orderBy: { name: 'asc' } })
 
 describe('a run end to end', () => {
+  it('generation:probe builds the same model inputs as the stages (place, levers, discover)', async () => {
+    const tree = await testTree(); trees.push(tree)
+    const s = specs(10)
+    web(s)
+    const m = model(s)
+    const node = await prisma.taxonomyNode.findUniqueOrThrow({ where: { id: tree.nodeId }, select: { id: true, slug: true, name: true, searchTerms: true, kind: true } })
+    // Built before the run: LEVERS adds definitions, which the next LEVERS input would then list.
+    const probe = {
+      place: (await buildProbeRequest('place', node, null)).input,
+      levers: (await buildProbeRequest('levers', node, null)).input,
+      discover: (await buildProbeRequest('discover', node, null)).input,
+    }
+    await run(tree)
+    expect(m.inputs.place?.[0]).toEqual(probe.place)
+    expect(m.inputs.levers?.[0]).toEqual(probe.levers)
+    expect(m.inputs.discover?.[0]).toEqual(probe.discover)
+  })
+
   it('runs every stage, approves products that pass every check, stores values with evidence, and notifies once', async () => {
     const tree = await testTree(); trees.push(tree)
     const s = specs(10)

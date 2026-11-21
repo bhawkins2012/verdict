@@ -31,8 +31,8 @@ export function describeModelError(err: unknown): ModelErrorDescription {
   if (err instanceof Anthropic.APIError) {
     const status = typeof err.status === 'number' ? err.status : null
     const errorType = err.type ?? null
-    const apiMessage = err.apiMessage ? redactApiText(err.apiMessage) : null
-    const requestId = err.requestID ? redactApiText(err.requestID) : null
+    const apiMessage = typeof err.apiMessage === 'string' && err.apiMessage ? redactApiText(err.apiMessage) : null
+    const requestId = typeof err.requestID === 'string' && err.requestID ? redactApiText(err.requestID) : null
     const code = `api_error:${status ?? 'connection'}`
     let detail: string | null
     if (status === null) {

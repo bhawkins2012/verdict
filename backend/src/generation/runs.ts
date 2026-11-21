@@ -293,8 +293,8 @@ type StageHandler = (ctx: RunContext) => Promise<unknown>
 // ── Model inputs (shared with `npm run generation:probe`, so it sends what the stage would) ─────────
 export type StageNode = RunContext['node']
 
-export async function placeInputFor(node: StageNode): Promise<PlaceInput> {
-  const t = await loadTaxonomy()
+export async function placeInputFor(node: StageNode, taxonomy?: Awaited<ReturnType<typeof loadTaxonomy>>): Promise<PlaceInput> {
+  const t = taxonomy ?? await loadTaxonomy()
   return { nodeSlug: node.slug, nodeName: node.name, path: t.path(node.id).map((n) => n.name), outline: t.outline() }
 }
 
@@ -340,7 +340,7 @@ export async function explainInputFor(node: StageNode): Promise<ExplainInput> {
 // ── PLACE ───────────────────────────────────────────────────────────────────────────────────────────
 const place: StageHandler = async (ctx) => {
   const t = await loadTaxonomy()
-  const input = await placeInputFor(ctx.node)
+  const input = await placeInputFor(ctx.node, t)
   const outline = input.outline
   const r = await callModel(ctx, RunStage.PLACE, null, outline.length + 2_000, 0, () => ctx.model.place(input, ctx.config))
   const parsed = PlacementSchema.safeParse(r.output)

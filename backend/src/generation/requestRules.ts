@@ -9,7 +9,9 @@
 //   https://platform.claude.com/docs/en/api/errors (#common-validation-errors: disabled thinking and forced
 //   tool_choice are 400s on claude-opus-5-5).
 // - Web search versions and domain lists: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
-// - Non-streaming max_tokens: the TypeScript SDK refuses non-streaming requests above 21,333 tokens.
+// - Non-streaming max_tokens: the TypeScript SDK refuses non-streaming requests above 21,333 tokens when the
+//   client sets no timeout. Ours set REQUEST_TIMEOUT_MS (4 minutes per attempt), so the SDK would not refuse;
+//   the check keeps GENERATION_MAX_TOKENS (at most 21000) inside the range a non-streaming request is meant for.
 // Passing these checks does not guarantee the API accepts a schema: it also has internal grammar-size limits
 // ("Schema is too complex for compilation") that only a live request (the probe) can show.
 import type Anthropic from '@anthropic-ai/sdk'

@@ -7,9 +7,10 @@
 // Refuses unless GENERATION_MODE=live. Stores nothing: no run, no call row, no products, and the cost is not
 // counted against the generation caps, so it prints it instead.
 //
-// Stages: place | levers | discover | extract | explain. extract uses the node's current levers and a short
-// stand-in document (the real one is a fetched manufacturer page); everything else about it is the stage's
-// own request. --shape-only prints the shape and checks without sending (works in dry-run mode too).
+// Stages: place | levers | discover | extract | explain. The editor notes are those of the node's latest run
+// (what a Resume of that run would send). extract uses the node's current levers and a short stand-in
+// document (the real one is a fetched manufacturer page); everything else about it is the stage's own request.
+// --shape-only prints the shape and checks without sending (works in dry-run mode too).
 import 'dotenv/config' // backend/.env, like the app
 import './quietPrisma' // before anything imports lib/prisma
 import Anthropic from '@anthropic-ai/sdk'
@@ -26,17 +27,18 @@ import { discoverInputFor, explainInputFor, extractionLeversFor, leversInputFor,
 const STAGES: ModelStage[] = ['place', 'levers', 'discover', 'extract', 'explain']
 const VALIDATORS = { place: PlacementSchema, levers: LeverSetSchema, discover: DiscoverySchema, extract: ExtractionSchema, explain: ExplainerSchema }
 const USAGE = 'Usage: npm run generation:probe -- <place|levers|discover|extract|explain> <node-slug> [--shape-only]'
+const FLAGS = ['--shape-only']
 
 type Print = (line: string) => void
 
-export async function buildProbeRequest(stage: ModelStage, node: StageNode & { kind: NodeKind }): Promise<StageRequestInput> {
+export async function buildProbeRequest(stage: ModelStage, node: StageNode & { kind: NodeKind }, notes: string | null): Promise<StageRequestInput> {
   const decision = stage !== 'explain'
   if (decision && node.kind !== NodeKind.DECISION) throw new Error(`${node.slug} is a navigation node: only explain runs there`)
   if (!decision && node.kind !== NodeKind.NAVIGATION) throw new Error(`${node.slug} is a decision node: explain runs on navigation nodes`)
   switch (stage) {
     case 'place': return { stage, input: await placeInputFor(node) }
-    case 'levers': return { stage, input: await leversInputFor(node, null) }
-    case 'discover': return { stage, input: await discoverInputFor(node, null) }
+    case 'levers': return { stage, input: await leversInputFor(node, notes) }
+    case 'discover': return { stage, input: await discoverInputFor(node, notes) }
     case 'explain': return { stage, input: await explainInputFor(node) }
     case 'extract': {
       const { leversIn } = await extractionLeversFor(node.id)
@@ -57,19 +59,22 @@ export async function buildProbeRequest(stage: ModelStage, node: StageNode & { k
 
 /** Send once; for discovery, follow pause_turn like the stage does. Returns the exit code. */
 export async function sendProbe(stage: ModelStage, request: Anthropic.MessageCreateParamsNonStreaming, config: GenerationConfig, print: Print,
-  client = new Anthropic({ apiKey: config.apiKey, timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 })): Promise<number> {
+  client?: Anthropic): Promise<number> {
+  if (!client && process.env.NODE_ENV === 'test') throw new Error('Tests must pass a client to sendProbe (the probe never reaches the API from a test)')
+  const api = client ?? new Anthropic({ apiKey: config.apiKey, timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 })
   const messages: Anthropic.MessageParam[] = [...request.messages]
   let total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, webSearches: 0 }
   for (let resume = 0; ; resume++) {
     let response: Anthropic.Message
     const started = Date.now()
     try {
-      response = await client.messages.create({ ...request, messages })
+      response = await api.messages.create({ ...request, messages })
     } catch (err) {
       const d = describeModelError(err)
       print(`\nFAILED after ${((Date.now() - started) / 1000).toFixed(1)} s (request ${resume + 1}): ${modelErrorText(d)}`)
       // The whole error body as the API sent it (it never contains the request).
       if (err instanceof Anthropic.APIError && err.error) print(`Error body: ${JSON.stringify(err.error, null, 2)}`)
+      if (resume > 0) print(`Earlier requests of this probe used ${JSON.stringify(total)} (about $${(costUsd(config.model, total) ?? 0).toFixed(4)}).`)
       return 1
     }
     const u = response.usage
@@ -95,12 +100,14 @@ export async function sendProbe(stage: ModelStage, request: Anthropic.MessageCre
     print(`Output:\n${JSON.stringify(output, null, 2)}`)
     const valid = VALIDATORS[stage].safeParse(output)
     print(valid.success ? '\nThe stage\'s own validation (zod) accepts this output.' : `\nThe stage's own validation rejects it: ${describeIssues(valid.error)}`)
-    return response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens' ? 1 : 0
+    return valid.success && response.stop_reason !== 'refusal' && response.stop_reason !== 'max_tokens' ? 0 : 1
   }
 }
 
 export async function runProbe(args: string[], env: NodeJS.ProcessEnv, print: Print): Promise<number> {
   const shapeOnly = args.includes('--shape-only')
+  const unknown = args.filter((a) => a.startsWith('--') && !FLAGS.includes(a))
+  if (unknown.length) { print(`Unknown option ${unknown.join(', ')}\n${USAGE}`); return 2 }
   const [rawStage, slug] = args.filter((a) => !a.startsWith('--'))
   const stage = rawStage?.toLowerCase() as ModelStage | undefined
   if (!stage || !STAGES.includes(stage) || !slug) { print(USAGE); return 2 }
@@ -114,12 +121,14 @@ export async function runProbe(args: string[], env: NodeJS.ProcessEnv, print: Pr
 
   const node = await prisma.taxonomyNode.findUnique({ where: { slug }, select: { id: true, slug: true, name: true, searchTerms: true, kind: true } })
   if (!node) { print(`No node with slug "${slug}"`); return 2 }
+  const latest = await prisma.generationRun.findFirst({ where: { nodeId: node.id }, orderBy: { createdAt: 'desc' }, select: { notes: true } })
+  const notes = latest?.notes ?? null
   let request: Anthropic.MessageCreateParamsNonStreaming
   try {
-    request = buildStageRequest(await buildProbeRequest(stage, node), config)
+    request = buildStageRequest(await buildProbeRequest(stage, node, notes), config)
   } catch (err) { print(err instanceof Error ? err.message : String(err)); return 2 }
 
-  print(`Probe: ${stage.toUpperCase()} for ${node.name} (${node.slug}), mode ${config.mode}`)
+  print(`Probe: ${stage.toUpperCase()} for ${node.name} (${node.slug}), mode ${config.mode}, ${notes ? `editor notes from the latest run (${notes.length} chars)` : 'no editor notes'}`)
   print(`Request shape (prompt text omitted):\n${JSON.stringify(requestShape(request), null, 2)}`)
   const issues = requestIssues(request)
   print(issues.length ? `\nLocal checks against the docs: ${issues.length} problem(s)\n- ${issues.join('\n- ')}` : '\nLocal checks against the docs: none found (the API can still reject a schema as too complex; only sending shows that).')

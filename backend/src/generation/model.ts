@@ -1,6 +1,7 @@
 // The one place that talks to the Anthropic API for the generation run (docs/adr-generation-run.md D5.8).
-// Tests inject a fake with setGenerationModelForTests; dry runs use the fixture model; nothing else in
-// the code base constructs an Anthropic client for generation.
+// Tests inject a fake with setGenerationModelForTests; dry runs use the fixture model. The only other
+// Anthropic client is `npm run generation:probe` (scripts/generationProbe.ts), which sends one request built
+// by buildStageRequest below and, like liveModel(), refuses to create a client under NODE_ENV=test.
 import Anthropic from '@anthropic-ai/sdk'
 import { CANONICAL_UNITS } from '../catalog/units'
 import { GenerationConfig } from './config'
