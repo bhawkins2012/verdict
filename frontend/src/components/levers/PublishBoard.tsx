@@ -16,7 +16,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, MoreHorizontal, X } from 'lucide-react'
 import clsx from 'clsx'
-import { AdminLever } from '../../types/levers'
+import { BoardLever } from '../../types/levers'
 import { TYPE_LABEL } from './LeverForm'
 import {
   addToSet, applyDrop, candidatesOf, FULL_MESSAGE, isComplete, moveBy, planDrop, publishPayload, removeFromSet,
@@ -24,13 +24,13 @@ import {
 } from '../../lib/publishSet'
 
 export interface PublishBoardProps {
-  levers: AdminLever[]
+  levers: BoardLever[]
   set: string[]
   onSetChange: (next: string[]) => void
   onPublish: (leverIds: string[]) => void
   publishing?: boolean
   /** Edit and Retire controls (and the edit form) for a card. */
-  renderControls: (lever: AdminLever) => ReactNode
+  renderControls: (lever: BoardLever) => ReactNode
   /** Status shown under the publish button (errors, "Published."). */
   publishStatus?: ReactNode
   /** Cards that must not move (their Edit form is open): moving remounts the card and would drop the draft. */
@@ -367,7 +367,7 @@ function DropZone({ id, label, className, highlight, refused, children }: {
 interface MenuItem { label: string; onSelect: () => void; disabled?: boolean; hint?: string }
 
 function LeverCard({ lever, zone, slot, dragging, locked = false, menu, onRemove, controls }: {
-  lever: AdminLever; zone: Zone; slot?: number; dragging: boolean; locked?: boolean; menu: MenuItem[]; onRemove?: () => void; controls: ReactNode
+  lever: BoardLever; zone: Zone; slot?: number; dragging: boolean; locked?: boolean; menu: MenuItem[]; onRemove?: () => void; controls: ReactNode
 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition } = useSortable({ id: lever.id, data: { zone }, disabled: locked })
   const style = { transform: CSS.Transform.toString(transform), transition }
@@ -401,17 +401,22 @@ function LeverCard({ lever, zone, slot, dragging, locked = false, menu, onRemove
           <p className="text-sm">
             <span className="font-medium text-ink-900">{lever.name}</span>
             <span className="text-ink-400"> · {TYPE_LABEL[lever.type]}{lever.unit ? ` (${lever.unit})` : ''}{lever.inputFormat === 'DIMENSIONS' ? ', from L × W × H' : ''}</span>
-            {lever.status === 'APPROVED' && <span className="ml-2 text-xs text-green-700">Published #{lever.position}</span>}
-            {lever.survey && <span className="ml-2 text-xs bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded">Survey #{lever.survey.rank} · {lever.survey.respondents} owners</span>}
           </p>
-          <p className="text-xs text-ink-600">{lever.explanation}</p>
+          <p className="flex flex-wrap gap-1 mt-1 text-[11px]">
+            <CoverageBadge coverage={lever.coverage} />
+            {lever.safety && <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-800">Safety</span>}
+            {lever.origin === 'REFERENCE' && <span className="px-1.5 py-0.5 rounded bg-ink-100 text-ink-700">Reference (Phase A)</span>}
+            {lever.status === 'APPROVED' && <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-800">Published #{lever.position}</span>}
+            {lever.survey && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-800">Survey #{lever.survey.rank} · {lever.survey.respondents} owners</span>}
+          </p>
+          <p className="text-xs text-ink-600 mt-1">{lever.explanation}</p>
+          {lever.note && <p className="text-xs text-ink-500 italic">{lever.note}</p>}
           <p className="text-[11px] text-ink-400">
-            {lever.origin === 'GENERATED' ? 'Generated' : 'Added by admin'}
+            {lever.origin === 'GENERATED' ? 'Generated' : lever.origin === 'REFERENCE' ? 'Phase A reference' : 'Added by admin'}
+            {lever.sharedWith.length > 0 && ` · shared with: ${lever.sharedWith.join(', ')}`}
             {lever.relatedNeeds.length > 0 && ` · needs: ${lever.relatedNeeds.join(', ')}`}
             {lever.allowedValues.length > 0 && ` · values: ${lever.allowedValues.join(', ')}`}
             {lever.approvedAt && ` · approved by ${lever.approvedBy ?? 'seed'} ${new Date(lever.approvedAt).toLocaleDateString()}`}
-            {lever.editedAt && ` · edited by ${lever.editedBy} ${new Date(lever.editedAt).toLocaleDateString()}`}
-            {lever.valueCount > 0 && ` · ${lever.valueCount} product values`}
           </p>
         </div>
         {onRemove && (
@@ -421,6 +426,23 @@ function LeverCard({ lever, zone, slot, dragging, locked = false, menu, onRemove
       </div>
       {controls}
     </div>
+  )
+}
+
+/** Data coverage: products with a value found (and accepted), amber below the 80% publish gate. */
+export function CoverageBadge({ coverage }: { coverage: BoardLever['coverage'] }) {
+  const { found, accepted, products } = coverage
+  const low = products === 0 || found * 5 < products * 4
+  const acceptedLow = products === 0 || accepted * 5 < products * 4
+  return (
+    <span
+      className={clsx('px-1.5 py-0.5 rounded', low ? 'bg-amber-100 text-amber-900' : 'bg-ink-100 text-ink-700')}
+      title="Approved products with a value found on the manufacturer page or manual (accepted so far in brackets). Publishing needs 80% accepted."
+      data-testid="coverage"
+    >
+      {found} of {products}
+      {accepted > 0 && <span className={clsx(acceptedLow ? 'text-amber-900' : 'text-green-800')}> ({accepted} accepted)</span>}
+    </span>
   )
 }
 

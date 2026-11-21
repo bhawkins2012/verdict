@@ -38,14 +38,24 @@ app.use(cors({
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }))
 app.use(express.json({ limit: '10mb' }))
 
-// Rate limiting
+// Rate limiting. Admin routes have their own, higher limit: reviewing one node by keyboard is a few hundred
+// requests (each decision and a refetch), which the general limit would cut off halfway. Every admin
+// request is authenticated and its role read from the database, so the general limit is not their guard.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: Number(process.env.RATE_LIMIT_MAX) || 200,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/admin/'),
+})
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.ADMIN_RATE_LIMIT_MAX) || 3000,
+  standardHeaders: true,
+  legacyHeaders: false,
 })
 app.use('/api', limiter)
+app.use('/api/admin', adminLimiter)
 
 // ── Routes ─────────────────────────────────────────────────
 app.use('/api/auth', authRouter)

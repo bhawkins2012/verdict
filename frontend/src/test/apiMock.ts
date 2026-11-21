@@ -20,4 +20,5 @@ export const api = {
   get: vi.fn((url: string) => call('GET', url)),
   put: vi.fn((url: string, body?: unknown) => call('PUT', url, body)),
   post: vi.fn((url: string, body?: unknown) => call('POST', url, body)),
+  patch: vi.fn((url: string, body?: unknown) => call('PATCH', url, body)),
 }
