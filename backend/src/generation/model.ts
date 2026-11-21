@@ -175,6 +175,67 @@ export function parseJsonText(content: readonly Anthropic.ContentBlock[]): unkno
   }
 }
 
+// ── Requests ────────────────────────────────────────────────────────────────────────────────────────
+// Every request the generation run sends is built here, so the client, `npm run generation:probe` and the
+// request-shape tests all see exactly the same thing.
+export type ModelStage = 'place' | 'levers' | 'discover' | 'extract' | 'explain'
+export type StructuredStage = Exclude<ModelStage, 'discover'>
+export type StageRequestInput =
+  | { stage: 'place'; input: PlaceInput }
+  | { stage: 'levers'; input: LeversInput }
+  | { stage: 'discover'; input: DiscoverInput }
+  | { stage: 'extract'; input: ExtractInput }
+  | { stage: 'explain'; input: ExplainInput }
+
+/** The output schema each structured stage sends as `output_config.format`. */
+export const STAGE_OUTPUT_SCHEMA: Record<StructuredStage, Record<string, unknown>> = {
+  place: PLACEMENT_JSON_SCHEMA, levers: LEVER_SET_JSON_SCHEMA, extract: EXTRACTION_JSON_SCHEMA, explain: EXPLAINER_JSON_SCHEMA,
+}
+const STAGE_SYSTEM: Record<ModelStage, string> = {
+  place: PLACE_SYSTEM, levers: LEVERS_SYSTEM, discover: DISCOVER_SYSTEM, extract: EXTRACT_SYSTEM, explain: EXPLAIN_SYSTEM,
+}
+
+export const PROPOSE_PRODUCTS_TOOL: Anthropic.Tool = {
+  name: 'propose_products',
+  description: 'Submit the list of products found, with manufacturer page URLs.',
+  input_schema: { ...PROPOSE_PRODUCTS_TOOL_SCHEMA, required: [...PROPOSE_PRODUCTS_TOOL_SCHEMA.required] },
+  strict: true,
+}
+
+export function webSearchTool(): Anthropic.WebSearchTool20260318 {
+  return { type: 'web_search_20260318', name: 'web_search', max_uses: DISCOVERY_MAX_SEARCHES, blocked_domains: blockedSearchDomains() }
+}
+
+function userMessage(r: StageRequestInput): string {
+  switch (r.stage) {
+    case 'place': return placeMessage(r.input)
+    case 'levers': return leversMessage(r.input)
+    case 'discover': return discoverMessage(r.input)
+    case 'extract': return extractMessage(r.input)
+    case 'explain': return explainMessage(r.input)
+  }
+}
+
+/**
+ * The first (or only) request a stage sends. Structured stages: adaptive thinking, the stage's effort and
+ * a JSON output schema. Discovery: web search plus the strict `propose_products` tool instead of an output
+ * schema, because web search results always carry citations, which the API rejects with a JSON format.
+ * Forced tool_choice (`any`/`tool`) is a 400 on claude-opus-5-5, so discovery uses `auto` and the prompt.
+ */
+export function buildStageRequest(r: StageRequestInput, config: GenerationConfig): Anthropic.MessageCreateParamsNonStreaming {
+  const base = {
+    model: config.model,
+    max_tokens: config.maxTokens,
+    thinking: { type: 'adaptive' as const },
+    system: STAGE_SYSTEM[r.stage],
+    messages: [{ role: 'user' as const, content: userMessage(r) }],
+  }
+  if (r.stage === 'discover') {
+    return { ...base, output_config: { effort: STAGE_EFFORT.discover }, tools: [webSearchTool(), PROPOSE_PRODUCTS_TOOL], tool_choice: { type: 'auto' } }
+  }
+  return { ...base, output_config: { effort: STAGE_EFFORT[r.stage], format: { type: 'json_schema', schema: STAGE_OUTPUT_SCHEMA[r.stage] } } }
+}
+
 export class AnthropicGenerationModel implements GenerationModel {
   /** `fetchImpl` lets tests check the exact request without a network call. */
   constructor(private readonly fetchImpl?: typeof fetch) {}
@@ -188,52 +249,26 @@ export class AnthropicGenerationModel implements GenerationModel {
     })
   }
 
-  private async structured(config: GenerationConfig, effort: Effort, system: string, message: string, schema: Record<string, unknown>): Promise<ModelResult> {
-    const response = await this.client(config).messages.create({
-      model: config.model,
-      max_tokens: config.maxTokens,
-      thinking: { type: 'adaptive' },
-      output_config: { effort, format: { type: 'json_schema', schema } },
-      system,
-      messages: [{ role: 'user', content: message }],
-    })
+  private async structured(config: GenerationConfig, r: StageRequestInput): Promise<ModelResult> {
+    const response = await this.client(config).messages.create(buildStageRequest(r, config))
     return { output: parseJsonText(response.content), stopReason: response.stop_reason, servedModel: response.model, usage: usageOf(response) }
   }
 
-  place(i: PlaceInput, c: GenerationConfig) { return this.structured(c, STAGE_EFFORT.place, PLACE_SYSTEM, placeMessage(i), PLACEMENT_JSON_SCHEMA) }
-  levers(i: LeversInput, c: GenerationConfig) { return this.structured(c, STAGE_EFFORT.levers, LEVERS_SYSTEM, leversMessage(i), LEVER_SET_JSON_SCHEMA) }
-  extract(i: ExtractInput, c: GenerationConfig) { return this.structured(c, STAGE_EFFORT.extract, EXTRACT_SYSTEM, extractMessage(i), EXTRACTION_JSON_SCHEMA) }
-  explain(i: ExplainInput, c: GenerationConfig) { return this.structured(c, STAGE_EFFORT.explain, EXPLAIN_SYSTEM, explainMessage(i), EXPLAINER_JSON_SCHEMA) }
+  place(input: PlaceInput, c: GenerationConfig) { return this.structured(c, { stage: 'place', input }) }
+  levers(input: LeversInput, c: GenerationConfig) { return this.structured(c, { stage: 'levers', input }) }
+  extract(input: ExtractInput, c: GenerationConfig) { return this.structured(c, { stage: 'extract', input }) }
+  explain(input: ExplainInput, c: GenerationConfig) { return this.structured(c, { stage: 'explain', input }) }
 
-  /**
-   * Discovery: web search plus a strict client tool for the result. output_config.format cannot be used
-   * because web search results always carry citations, which the API rejects with a JSON format.
-   */
-  async discover(i: DiscoverInput, config: GenerationConfig): Promise<ModelResult> {
+  /** Discovery: resends a paused server-tool turn (pause_turn) until the model calls propose_products. */
+  async discover(input: DiscoverInput, config: GenerationConfig): Promise<ModelResult> {
     const client = this.client(config)
-    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: discoverMessage(i) }]
+    const first = buildStageRequest({ stage: 'discover', input }, config)
+    const messages: Anthropic.MessageParam[] = [...first.messages]
     let usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, webSearches: 0 }
     for (let resume = 0; ; resume++) {
       let response: Anthropic.Message
       try {
-        response = await client.messages.create({
-          model: config.model,
-          max_tokens: config.maxTokens,
-          thinking: { type: 'adaptive' },
-          output_config: { effort: STAGE_EFFORT.discover },
-          system: DISCOVER_SYSTEM,
-          tools: [
-            { type: 'web_search_20260318', name: 'web_search', max_uses: DISCOVERY_MAX_SEARCHES, blocked_domains: blockedSearchDomains() },
-            {
-              name: 'propose_products',
-              description: 'Submit the list of products found, with manufacturer page URLs.',
-              input_schema: { ...PROPOSE_PRODUCTS_TOOL_SCHEMA, required: [...PROPOSE_PRODUCTS_TOOL_SCHEMA.required] },
-              strict: true,
-            },
-          ],
-          tool_choice: { type: 'auto' },
-          messages,
-        })
+        response = await client.messages.create({ ...first, messages })
       } catch (err) {
         // Earlier requests of this call were billed: hand their usage to the caller with the error.
         throw resume > 0 ? new PartialUsageError(err, usage) : err

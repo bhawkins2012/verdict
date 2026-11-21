@@ -1,0 +1,588 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`stage requests discover: matches the documented shape (snapshot of keys, settings and schema) 1`] = `
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+    "tool_choice",
+    "tools",
+  ],
+  "max_tokens": 16000,
+  "messages": [
+    "user",
+  ],
+  "model": "claude-opus-5-5",
+  "output_config": {
+    "effort": "high",
+  },
+  "schema_complexity": {
+    "limits": {
+      "optional_params": 24,
+      "strict_tools": 20,
+      "union_params": 16,
+    },
+    "optional_params": 0,
+    "strict_tools": 1,
+    "union_params": 0,
+  },
+  "thinking": {
+    "type": "adaptive",
+  },
+  "tool_choice": {
+    "type": "auto",
+  },
+  "tools": [
+    {
+      "blocked_domains": "51 domains",
+      "max_uses": 8,
+      "name": "web_search",
+      "type": "web_search_20260318",
+    },
+    {
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "products": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "brand": {
+                  "type": "string",
+                },
+                "manufacturerUrl": {
+                  "type": "string",
+                },
+                "model": {
+                  "type": "string",
+                },
+                "rationale": {
+                  "type": "string",
+                },
+              },
+              "required": [
+                "brand",
+                "model",
+                "manufacturerUrl",
+                "rationale",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "products",
+        ],
+        "type": "object",
+      },
+      "name": "propose_products",
+      "strict": true,
+    },
+  ],
+}
+`;
+
+exports[`stage requests explain: matches the documented shape (snapshot of keys, settings and schema) 1`] = `
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+  ],
+  "max_tokens": 16000,
+  "messages": [
+    "user",
+  ],
+  "model": "claude-opus-5-5",
+  "output_config": {
+    "effort": "high",
+    "format": {
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "line": {
+                  "type": "string",
+                },
+                "slug": {
+                  "type": "string",
+                },
+              },
+              "required": [
+                "slug",
+                "line",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "explainer": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "explainer",
+          "children",
+        ],
+        "type": "object",
+      },
+      "type": "json_schema",
+    },
+  },
+  "schema_complexity": {
+    "limits": {
+      "optional_params": 24,
+      "strict_tools": 20,
+      "union_params": 16,
+    },
+    "optional_params": 0,
+    "strict_tools": 0,
+    "union_params": 0,
+  },
+  "thinking": {
+    "type": "adaptive",
+  },
+  "tool_choice": undefined,
+  "tools": undefined,
+}
+`;
+
+exports[`stage requests extract: matches the documented shape (snapshot of keys, settings and schema) 1`] = `
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+  ],
+  "max_tokens": 16000,
+  "messages": [
+    "user",
+  ],
+  "model": "claude-opus-5-5",
+  "output_config": {
+    "effort": "medium",
+    "format": {
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "nodeFit": {
+            "additionalProperties": false,
+            "properties": {
+              "belongs": {
+                "type": "boolean",
+              },
+              "confidence": {
+                "enum": [
+                  "HIGH",
+                  "MEDIUM",
+                  "LOW",
+                ],
+                "type": "string",
+              },
+              "reason": {
+                "type": "string",
+              },
+            },
+            "required": [
+              "belongs",
+              "confidence",
+              "reason",
+            ],
+            "type": "object",
+          },
+          "values": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bool": {
+                  "type": [
+                    "boolean",
+                    "null",
+                  ],
+                },
+                "choice": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "confidence": {
+                  "enum": [
+                    "HIGH",
+                    "MEDIUM",
+                    "LOW",
+                  ],
+                  "type": "string",
+                },
+                "dimensions": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "height": {
+                      "type": "string",
+                    },
+                    "length": {
+                      "type": "string",
+                    },
+                    "width": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "length",
+                    "width",
+                    "height",
+                  ],
+                  "type": [
+                    "object",
+                    "null",
+                  ],
+                },
+                "found": {
+                  "type": "boolean",
+                },
+                "items": {
+                  "items": {
+                    "type": "string",
+                  },
+                  "type": [
+                    "array",
+                    "null",
+                  ],
+                },
+                "lever": {
+                  "type": "string",
+                },
+                "oneHandFold": {
+                  "type": [
+                    "boolean",
+                    "null",
+                  ],
+                },
+                "quote": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "statedUnit": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "statedValue": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+              },
+              "required": [
+                "lever",
+                "found",
+                "statedValue",
+                "statedUnit",
+                "dimensions",
+                "items",
+                "choice",
+                "bool",
+                "oneHandFold",
+                "quote",
+                "source",
+                "confidence",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "nodeFit",
+          "values",
+        ],
+        "type": "object",
+      },
+      "type": "json_schema",
+    },
+  },
+  "schema_complexity": {
+    "limits": {
+      "optional_params": 24,
+      "strict_tools": 20,
+      "union_params": 16,
+    },
+    "optional_params": 0,
+    "strict_tools": 0,
+    "union_params": 9,
+  },
+  "thinking": {
+    "type": "adaptive",
+  },
+  "tool_choice": undefined,
+  "tools": undefined,
+}
+`;
+
+exports[`stage requests levers: matches the documented shape (snapshot of keys, settings and schema) 1`] = `
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+  ],
+  "max_tokens": 16000,
+  "messages": [
+    "user",
+  ],
+  "model": "claude-opus-5-5",
+  "output_config": {
+    "effort": "high",
+    "format": {
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "definition": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allowedValues": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "explanation": {
+                      "type": "string",
+                    },
+                    "inputFormat": {
+                      "enum": [
+                        "SINGLE",
+                        "DIMENSIONS",
+                      ],
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "relatedNeeds": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "safetyFlag": {
+                      "type": "boolean",
+                    },
+                    "type": {
+                      "enum": [
+                        "MEASUREMENT",
+                        "CATEGORY",
+                        "COMPATIBILITY_LIST",
+                        "BOOLEAN",
+                      ],
+                      "type": "string",
+                    },
+                    "unit": {
+                      "enum": [
+                        "lb",
+                        "in",
+                        "cu ft",
+                        "years",
+                        "count",
+                        null,
+                      ],
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "type",
+                    "inputFormat",
+                    "unit",
+                    "explanation",
+                    "relatedNeeds",
+                    "allowedValues",
+                    "safetyFlag",
+                  ],
+                  "type": [
+                    "object",
+                    "null",
+                  ],
+                },
+                "note": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "reuseDefinitionId": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+              },
+              "required": [
+                "reuseDefinitionId",
+                "definition",
+                "note",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "referenceNotes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "definitionId": {
+                  "type": "string",
+                },
+                "keep": {
+                  "type": "boolean",
+                },
+                "note": {
+                  "type": "string",
+                },
+              },
+              "required": [
+                "definitionId",
+                "keep",
+                "note",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "candidates",
+          "referenceNotes",
+        ],
+        "type": "object",
+      },
+      "type": "json_schema",
+    },
+  },
+  "schema_complexity": {
+    "limits": {
+      "optional_params": 24,
+      "strict_tools": 20,
+      "union_params": 16,
+    },
+    "optional_params": 0,
+    "strict_tools": 0,
+    "union_params": 4,
+  },
+  "thinking": {
+    "type": "adaptive",
+  },
+  "tool_choice": undefined,
+  "tools": undefined,
+}
+`;
+
+exports[`stage requests place: matches the documented shape (snapshot of keys, settings and schema) 1`] = `
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+  ],
+  "max_tokens": 16000,
+  "messages": [
+    "user",
+  ],
+  "model": "claude-opus-5-5",
+  "output_config": {
+    "effort": "high",
+    "format": {
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "primaryParentFits": {
+            "type": "boolean",
+          },
+          "rationale": {
+            "type": "string",
+          },
+          "searchTerms": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "secondaryParents": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "suggestedPrimaryParent": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+        },
+        "required": [
+          "primaryParentFits",
+          "suggestedPrimaryParent",
+          "secondaryParents",
+          "searchTerms",
+          "rationale",
+        ],
+        "type": "object",
+      },
+      "type": "json_schema",
+    },
+  },
+  "schema_complexity": {
+    "limits": {
+      "optional_params": 24,
+      "strict_tools": 20,
+      "union_params": 16,
+    },
+    "optional_params": 0,
+    "strict_tools": 0,
+    "union_params": 1,
+  },
+  "thinking": {
+    "type": "adaptive",
+  },
+  "tool_choice": undefined,
+  "tools": undefined,
+}
+`;
