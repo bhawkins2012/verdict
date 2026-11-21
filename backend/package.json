@@ -13,6 +13,7 @@
     "lint": "eslint src tests prisma",
     "typecheck": "tsc -p tsconfig.check.json",
     "email:smoke": "ts-node --transpile-only src/scripts/emailSmoke.ts",
+    "generation:probe": "ts-node --transpile-only src/scripts/generationProbe.ts",
     "admin:grant": "ts-node --transpile-only src/scripts/adminRole.ts grant",
     "admin:revoke": "ts-node --transpile-only src/scripts/adminRole.ts revoke",
     "db:seed:catalog": "ts-node prisma/seedCatalog.ts",
