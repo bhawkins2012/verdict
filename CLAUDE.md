@@ -4,7 +4,7 @@ Longitudinal product-review platform. Users review a product at stages (initial,
 
 ## Product
 
-The product spec is `docs/product-spec.md`. Read the relevant section before any feature work. Never edit it; report conflicts instead (the spec is maintained in the product's Claude Project and committed unchanged).
+The product spec is `docs/product-spec.md`. Read the relevant section before any feature work. Never edit it yourself; report conflicts instead. When the owner attaches a new version, commit it unchanged as `docs/product-spec.md` in its own commit.
 
 ## Architecture
 
@@ -136,13 +136,13 @@ The taxonomy, shared lever definitions, and one generation run per decision node
 - The dev script keeps `--transpile-only` for speed; `npm run typecheck` is the source of truth for types.
 - Frontend API calls go through `src/lib/api.ts`. Auth endpoints (`/auth/login`, `/auth/register`) return 401 for bad credentials and must not trigger the session-refresh flow.
 - ML: return plain dicts/pydantic models from endpoints, not dataclass instances; SQL must quote Prisma's camelCase columns (`"userId"`).
-- Commits are small and single-purpose; bug fixes ship with a regression test that fails without the fix.
+- Commits are small and single-purpose; bug fixes ship with a regression test that fails without the fix (within the Verification budget: cosmetic UI fixes need none).
 
 ## Workflow
 
 - Work on a branch. Never merge and never push to main.
 - Gated work (schema, external services, data sourcing, cost, security, new features with product decisions): write `docs/adr-<topic>.md` from `docs/templates/adr.md` first, then stop for approval. The existing `docs/adr-*.md` notes predate the template and stay as they are.
-- Ungated work (UI, bug fixes, refactors, docs): go straight to a pull request.
+- Ungated work (UI, bug fixes, refactors, docs): go straight to a pull request. A fix that needs a schema change or changes the security design is gated.
 - Before every pull request, run the reviewer agent over the full diff and fix or list its findings.
 - Backlog: `docs/backlog.md` (stable item numbers, priority table). Small items (bugs, small changes) may also be GitHub Issues, labelled `size:S`/`size:M`/`size:L` and `type:bug`/`type:feature`/`type:chore`, each with the problem and acceptance criteria.
 
@@ -168,7 +168,9 @@ Project subagents live in `.claude/agents/`. Their tool lists limit which tools 
 
 ## Definition of done
 
-Typecheck, lint, tests and build pass locally and in CI (checks `Backend`, `Frontend`, `ML`) for every package touched. Reviewer findings are fixed or listed. Docs are updated (`README.md`, `docs/`, this file when commands, env vars or architecture change). The pull request report is complete. For this repo that also means:
+Typecheck, lint, tests and build pass locally and in CI (checks `Backend`, `Frontend`, `ML`) for every package touched. Reviewer findings are fixed or listed. Docs are updated: `README.md`, `docs/` and this file, whenever commands, env vars or architecture change. The pull request report is complete. For this repo that also means:
+
+- UI changes had their browser pass (Verification budget).
 
 - Schema changes include a committed migration; `prisma migrate diff` against the schema is empty (CI checks this).
 - Rules and fixes are tested within the verification budget; a fix's test fails without the fix.
