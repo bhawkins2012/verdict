@@ -109,7 +109,7 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 - An audit list (screenshots) of both pages on desktop and a 375px-wide viewport, agreed before changes.
 - Loading, empty, error and "no thread yet" states are explicit and offer the next action (e.g. "Write your first review").
 - Basic accessibility: headings in order, interactive elements reachable by keyboard, labelled form controls, sufficient contrast.
-- Verified in a browser (CLAUDE.md Definition of Done #5).
+- Verified in a browser (CLAUDE.md, "Verification budget").
 
 ---
 
