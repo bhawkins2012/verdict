@@ -4,7 +4,7 @@ Longitudinal product-review platform. Users review a product at stages (initial,
 
 ## Product
 
-The product spec is docs/product-spec.md; read the relevant section before any feature work.
+The product spec is `docs/product-spec.md`. Read the relevant section before any feature work. Never edit it yourself; report conflicts instead. When the owner attaches a new version, commit it unchanged as `docs/product-spec.md` in its own commit.
 
 ## Architecture
 
@@ -136,26 +136,45 @@ The taxonomy, shared lever definitions, and one generation run per decision node
 - The dev script keeps `--transpile-only` for speed; `npm run typecheck` is the source of truth for types.
 - Frontend API calls go through `src/lib/api.ts`. Auth endpoints (`/auth/login`, `/auth/register`) return 401 for bad credentials and must not trigger the session-refresh flow.
 - ML: return plain dicts/pydantic models from endpoints, not dataclass instances; SQL must quote Prisma's camelCase columns (`"userId"`).
-- Commits are small and single-purpose; bug fixes ship with a regression test that fails without the fix.
+- Commits are small and single-purpose; bug fixes ship with a regression test that fails without the fix (within the Verification budget: cosmetic UI fixes need none).
+
+## Workflow
+
+- Work on a branch. Never merge and never push to main.
+- Gated work (schema, external services, data sourcing, cost, security, new features with product decisions): write `docs/adr-<topic>.md` from `docs/templates/adr.md` first, then stop for approval. The existing `docs/adr-*.md` notes predate the template and stay as they are.
+- Ungated work (UI, bug fixes, refactors, docs): go straight to a pull request. A fix that needs a schema change or changes the security design is gated.
+- Before every pull request, run the reviewer agent over the full diff and fix or list its findings.
+- Backlog: `docs/backlog.md` (stable item numbers, priority table). Small items (bugs, small changes) may also be GitHub Issues, labelled `size:S`/`size:M`/`size:L` and `type:bug`/`type:feature`/`type:chore`, each with the problem and acceptance criteria.
+
+## Verification budget
+
+- Tests and mutation checks cover business rules, data integrity, security and safety. Cosmetic UI gets none.
+- UI gets one browser pass. Admin and internal screens: desktop only. Public pages: desktop and 390 px.
+- Hand-only checks (real devices, real email, payments): stop after two failed attempts and list them under Not verified. Here that includes the `email:smoke` run with a real Resend key and a live generation run.
+- Do not build tooling just to verify something a person can check in two minutes.
+- Infrastructure work only when a product task needs it; otherwise add it to the backlog.
+
+## Reports
+
+Pull request descriptions and final messages follow `.github/pull_request_template.md`. Decisions needed go first. About 40 lines at most; detail lives in commits and docs.
 
 ## Agents
 
-Project subagents live in `.claude/agents/`. Their tool lists limit which tools they get, not which paths they touch; the path rules are in each definition.
+Project subagents live in `.claude/agents/`. Their tool lists limit which tools they get, not which paths they touch; the path rules are in each definition, and the reviewer pass is the backstop.
 
-- **architect**: before changing the schema, an API contract, a job or a service boundary; writes ADRs/designs in `docs/` only.
-- **qa**: after implementing a feature or fix; writes and runs tests (test files only) and mutation-checks every fix.
-- **reviewer**: before opening or merging a PR; read-only review of the diff against this file (logic, security, missing tests, unverified claims).
+- **architect**: design notes in `docs/` only (never `docs/product-spec.md`). Use before gated work, including any change to the schema, an API contract, a job or a service boundary.
+- **qa**: tests and mutation checks; test files only. Use after implementing a rule or fixing a bug.
+- **reviewer**: read-only review of a diff before every pull request.
 
 ## Definition of done
 
-A change is done when, locally and in CI (`Backend`, `Frontend`, `ML` checks green):
+Typecheck, lint, tests and build pass locally and in CI (checks `Backend`, `Frontend`, `ML`) for every package touched. Reviewer findings are fixed or listed. Docs are updated: `README.md`, `docs/` and this file, whenever commands, env vars or architecture change. The pull request report is complete. For this repo that also means:
 
-1. `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` pass for every package you touched.
-2. New behavior and bug fixes have tests; for a fix, the test fails without it.
-3. Schema changes include a committed migration; `prisma migrate diff` against the schema is empty (CI checks this).
-4. No new `any`/suppressions, no committed `.env`, no new dependency that isn't called out in the PR description.
-5. UI changes were exercised in a browser, not just by tests.
-6. Docs (`README.md`, `docs/`, this file) are updated if commands, env vars or architecture changed.
+- UI changes had their browser pass (Verification budget).
+
+- Schema changes include a committed migration; `prisma migrate diff` against the schema is empty (CI checks this).
+- Rules and fixes are tested within the verification budget; a fix's test fails without the fix.
+- No new `any`/suppressions, no committed `.env`, and every new dependency is listed under New dependencies in the report.
 
 ## Known gaps
 

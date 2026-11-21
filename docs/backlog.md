@@ -106,10 +106,10 @@ Issue-ready items. Each item has a problem statement, acceptance criteria and a 
 **Problem.** `frontend/src/pages/ProductPage.tsx` and `ReviewThreadPage.tsx` have not had a UX pass since the MVP; Sprint 0 only verified they render without errors. One known rough edge: opening `/products/:id/thread` for a product the user has not reviewed hits a 404 from `GET /api/reviews/thread/:productId` (seen during the Sprint 0 browser check); what the page shows in that state was not checked.
 
 **Acceptance criteria**
-- An audit list (screenshots) of both pages on desktop and a 375px-wide viewport, agreed before changes.
+- An audit list (screenshots) of both pages on desktop and a 390px-wide viewport, agreed before changes.
 - Loading, empty, error and "no thread yet" states are explicit and offer the next action (e.g. "Write your first review").
 - Basic accessibility: headings in order, interactive elements reachable by keyboard, labelled form controls, sufficient contrast.
-- Verified in a browser (CLAUDE.md Definition of Done #5).
+- Verified in a browser (CLAUDE.md, "Verification budget").
 
 ---
 
