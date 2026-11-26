@@ -444,7 +444,7 @@ Airlines are fictional (Airline A, B, C); real figures are filled, quote-checked
 ## Schema and migration plan
 - **How migrations are applied:** each one with `prisma migrate deploy` only, and each stands alone.
 - **Generated versus hand-written SQL:** column, enum, table and default DDL comes from `prisma migrate diff --script`. Only CHECKs, triggers, expression and partial indexes, and data steps are hand-written, as `migrate diff` ignores them.
-- **One transaction per migration:** each migration runs as one transaction, so a failure leaves no change.
+- **One transaction per migration:** `prisma migrate deploy` (Prisma 5.22, Postgres 16) applies each migration file as one transaction, so a failure leaves no change. Checked on 2026-11-26: a migration whose second statement failed left no trace of its first, and `_prisma_migrations` recorded it as failed (P3018), which blocks later deploys until `prisma migrate resolve`.
 
 1. **`lever_badge_enums`** (enum changes only; nothing uses a new value in the same migration, as in `20261115000000_review_stage_two_weeks`): `LeverBadge`, `LeverType` + `RATING_ONLY`, `EmailRateKind` + `SURVEY_CHECKIN_EMAIL`.
 2. **`lever_ranking`**, in this order. The deferred 0-or-5 trigger is dropped before any `node_levers` write, so no trigger events are pending when later `ALTER TABLE`s run.
